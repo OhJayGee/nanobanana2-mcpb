@@ -71,3 +71,65 @@ export function loadImageParts(imagePaths) {
 export function ensureOutputDir() {
   mkdirSync(OUTPUT_DIR, { recursive: true });
 }
+
+// ---------------------------------------------------------------------------
+// Gemini API Client (exported for testing)
+// ---------------------------------------------------------------------------
+
+export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts }) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY environment variable is not set. Configure it in the extension settings.");
+  }
+
+  const body = {
+    contents: [{ parts }],
+    generationConfig: {
+      responseModalities: modalities,
+      candidateCount: 1,
+      thinkingConfig: {
+        includeThoughts,
+        thinkingLevel,
+      },
+    },
+  };
+
+  const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(`Gemini API error: ${data.error.message}`);
+  }
+
+  const candidates = data.candidates;
+  if (!candidates || candidates.length === 0) {
+    throw new Error("Gemini API returned no candidates");
+  }
+
+  const candidate = candidates[0];
+
+  if (modalities.includes("IMAGE")) {
+    const imagePart = candidate.content.parts.find((p) => p.inlineData);
+    if (!imagePart) {
+      throw new Error("No image data in Gemini API response");
+    }
+    return { type: "image", data: Buffer.from(imagePart.inlineData.data, "base64") };
+  }
+
+  const textPart = candidate.content.parts.find((p) => p.text);
+  if (!textPart) {
+    throw new Error("No text data in Gemini API response");
+  }
+  return { type: "text", data: textPart.text };
+}
