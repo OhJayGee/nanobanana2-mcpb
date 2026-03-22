@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const GEMINI_MODEL = "gemini-3.1-flash-image-preview";
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const API_TIMEOUT_MS = 60_000;
 
 const OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
@@ -94,7 +94,9 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
     },
   };
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+  const endpoint = `${GEMINI_BASE_URL}/${GEMINI_MODEL}:generateContent`;
+
+  const response = await fetch(`${endpoint}?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

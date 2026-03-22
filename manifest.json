@@ -15,7 +15,8 @@
       "args": ["${__dirname}/server/index.js"],
       "env": {
         "GEMINI_API_KEY": "${user_config.gemini_api_key}",
-        "OUTPUT_DIR": "${user_config.output_directory}"
+        "OUTPUT_DIR": "${user_config.output_directory}",
+        "GEMINI_MODEL": "${user_config.gemini_model}"
       }
     }
   },
@@ -33,6 +34,12 @@
       "description": "Where generated and edited images are saved",
       "required": true,
       "default": "${HOME}/Desktop/nanobanana-output"
+    },
+    "gemini_model": {
+      "type": "string",
+      "title": "Gemini Model",
+      "description": "Gemini model ID for image generation. Change when Google promotes the model from preview to GA.",
+      "default": "gemini-3.1-flash-image-preview"
     }
   },
   "tools": [
