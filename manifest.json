@@ -1,0 +1,51 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "nanobanana",
+  "version": "1.0.0",
+  "display_name": "Nanobanana Image Studio",
+  "description": "Generate, edit, and analyze images using Nano Banana 2 (gemini-3.1-flash-image-preview)",
+  "author": { "name": "OhJayGee" },
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "GEMINI_API_KEY": "${user_config.gemini_api_key}",
+        "OUTPUT_DIR": "${user_config.output_directory}"
+      }
+    }
+  },
+  "user_config": {
+    "gemini_api_key": {
+      "type": "string",
+      "title": "Gemini API Key",
+      "description": "Your Google AI Studio API key for Nano Banana 2",
+      "sensitive": true,
+      "required": true
+    },
+    "output_directory": {
+      "type": "directory",
+      "title": "Output Directory",
+      "description": "Where generated and edited images are saved",
+      "required": true,
+      "default": "${HOME}/Desktop/nanobanana-output"
+    }
+  },
+  "tools": [
+    { "name": "generate_image", "description": "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls" },
+    { "name": "edit_image", "description": "Edit existing image(s) with a text instruction while preserving unmentioned elements" },
+    { "name": "extract_visual_dna", "description": "Extract visual DNA from image(s) as structured JSON (style, scene, subject, camera, lighting, materials, colors)" },
+    { "name": "describe_image", "description": "Generate a detailed text description of image(s)" },
+    { "name": "list_templates", "description": "List available pre-built Visual DNA style templates" },
+    { "name": "get_template", "description": "Get the JSON contents of a Visual DNA style template" }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": ["darwin", "win32"],
+    "runtimes": { "node": ">=18.0.0" }
+  }
+}

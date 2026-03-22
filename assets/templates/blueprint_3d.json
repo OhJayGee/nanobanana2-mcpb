@@ -1,0 +1,6 @@
+{
+  "style": "Technical Blueprint, 3D orthographic projection",
+  "materials": "Grid paper texture, blueprint blue background, white line art",
+  "lighting": "Flat, non-directional",
+  "camera": "Top-down view, zero perspective distortion"
+}
