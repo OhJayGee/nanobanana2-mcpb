@@ -151,7 +151,7 @@ if (!process.env.NANOBANANA_TEST) {
 
   const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
   const IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
-  const THINKING_LEVELS = ["minimal", "low", "medium", "high"];
+  const THINKING_LEVELS = ["minimal", "high"];
 
   // --- generate_image ---
   server.registerTool(
@@ -165,7 +165,7 @@ if (!process.env.NANOBANANA_TEST) {
         visual_dna: z.record(z.string()).optional().describe("Visual DNA JSON object to guide style consistency"),
         aspect_ratio: z.enum(ASPECT_RATIOS).default("1:1").describe("Output aspect ratio"),
         image_size: z.enum(IMAGE_SIZES).default("1K").describe("Resolution tier"),
-        thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest), low (simple prompts), medium (standard), high (complex scenes, text in images, precise adherence)"),
+        thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest, still uses some reasoning), high (complex scenes, text in images, precise adherence)"),
       },
     },
     async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }) => {
@@ -211,7 +211,7 @@ if (!process.env.NANOBANANA_TEST) {
         prompt: z.string().describe("Edit instruction"),
         aspect_ratio: z.enum(ASPECT_RATIOS).default("1:1").describe("Output aspect ratio"),
         image_size: z.enum(IMAGE_SIZES).default("1K").describe("Resolution tier"),
-        thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest), low (simple prompts), medium (standard), high (complex scenes, text in images, precise adherence)"),
+        thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest, still uses some reasoning), high (complex scenes, text in images, precise adherence)"),
       },
     },
     async ({ images, prompt, aspect_ratio, image_size, thinking_level }) => {
