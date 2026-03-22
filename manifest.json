@@ -9,10 +9,10 @@
   "license": "MIT",
   "server": {
     "type": "node",
-    "entry_point": "server/index.js",
+    "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/index.js"],
+      "args": ["${__dirname}/dist/index.js"],
       "env": {
         "GEMINI_API_KEY": "${user_config.gemini_api_key}",
         "OUTPUT_DIR": "${user_config.output_directory}",

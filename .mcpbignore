@@ -1,0 +1,9 @@
+node_modules/
+server/
+test/
+docs/
+.git/
+.gitignore
+.mcpbignore
+*.mcpb
+package-lock.json
