@@ -1,3 +1,6 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -134,4 +137,234 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
     throw new Error("No text data in Gemini API response");
   }
   return { type: "text", data: textPart.text };
+}
+
+// ---------------------------------------------------------------------------
+// MCP Server (only starts when not in test mode)
+// ---------------------------------------------------------------------------
+
+if (!process.env.NANOBANANA_TEST) {
+  const server = new McpServer({
+    name: "nanobanana",
+    version: "1.0.0",
+  });
+
+  const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
+  const IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
+  const THINKING_LEVELS = ["minimal", "medium", "high"];
+
+  // --- generate_image ---
+  server.registerTool(
+    "generate_image",
+    {
+      title: "Generate Image",
+      description: "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls",
+      inputSchema: {
+        prompt: z.string().describe("Text description of the image to generate"),
+        style: z.string().optional().describe("Artistic style instruction"),
+        visual_dna: z.record(z.string()).optional().describe("Visual DNA JSON object to guide style consistency"),
+        aspect_ratio: z.enum(ASPECT_RATIOS).default("1:1").describe("Output aspect ratio"),
+        image_size: z.enum(IMAGE_SIZES).default("1K").describe("Resolution tier"),
+        thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth"),
+      },
+    },
+    async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }) => {
+      try {
+        const jsonPrompt = { content: prompt, aspect_ratio, image_size };
+        if (style) jsonPrompt.style = style;
+        if (visual_dna) jsonPrompt.visual_dna = visual_dna;
+
+        const parts = [{ text: JSON.stringify(jsonPrompt) }];
+
+        const result = await callGeminiAPI({
+          parts,
+          modalities: ["IMAGE"],
+          thinkingLevel: thinking_level,
+          includeThoughts: true,
+        });
+
+        ensureOutputDir();
+        const filename = generateFilename(prompt);
+        const filePath = join(OUTPUT_DIR, filename);
+        writeFileSync(filePath, result.data);
+
+        return {
+          content: [{
+            type: "text",
+            text: `Image saved to ${filePath}\nPrompt: ${prompt}\nAspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`,
+          }],
+        };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  // --- edit_image ---
+  server.registerTool(
+    "edit_image",
+    {
+      title: "Edit Image",
+      description: "Edit existing image(s) with a text instruction while preserving unmentioned elements",
+      inputSchema: {
+        images: z.array(z.string()).min(1).max(14).describe("File paths to input images"),
+        prompt: z.string().describe("Edit instruction"),
+        aspect_ratio: z.enum(ASPECT_RATIOS).default("1:1").describe("Output aspect ratio"),
+        image_size: z.enum(IMAGE_SIZES).default("1K").describe("Resolution tier"),
+        thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth"),
+      },
+    },
+    async ({ images, prompt, aspect_ratio, image_size, thinking_level }) => {
+      try {
+        const imageParts = loadImageParts(images);
+        const jsonPrompt = { content: prompt, aspect_ratio, image_size };
+        const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
+
+        const result = await callGeminiAPI({
+          parts,
+          modalities: ["IMAGE"],
+          thinkingLevel: thinking_level,
+          includeThoughts: true,
+        });
+
+        ensureOutputDir();
+        const filename = generateFilename(prompt);
+        const filePath = join(OUTPUT_DIR, filename);
+        writeFileSync(filePath, result.data);
+
+        return {
+          content: [{
+            type: "text",
+            text: `Edited image saved to ${filePath}\nInstruction: ${prompt}\nSource images: ${images.join(", ")}\nAspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`,
+          }],
+        };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  // --- extract_visual_dna ---
+  server.registerTool(
+    "extract_visual_dna",
+    {
+      title: "Extract Visual DNA",
+      description: "Extract visual DNA from image(s) as structured JSON (style, scene, subject, camera, lighting, materials, colors)",
+      inputSchema: {
+        images: z.array(z.string()).min(1).max(14).describe("File paths to images to analyze"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ images }) => {
+      try {
+        const imageParts = loadImageParts(images);
+        const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
+        const parts = [...imageParts, { text: extractPrompt }];
+
+        const result = await callGeminiAPI({
+          parts,
+          modalities: ["TEXT"],
+          thinkingLevel: "minimal",
+          includeThoughts: false,
+        });
+
+        return { content: [{ type: "text", text: result.data }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  // --- describe_image ---
+  server.registerTool(
+    "describe_image",
+    {
+      title: "Describe Image",
+      description: "Generate a detailed text description of image(s)",
+      inputSchema: {
+        images: z.array(z.string()).min(1).max(14).describe("File paths to images to describe"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ images }) => {
+      try {
+        const imageParts = loadImageParts(images);
+        const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
+
+        const result = await callGeminiAPI({
+          parts,
+          modalities: ["TEXT"],
+          thinkingLevel: "minimal",
+          includeThoughts: false,
+        });
+
+        return { content: [{ type: "text", text: result.data }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  // --- list_templates ---
+  server.registerTool(
+    "list_templates",
+    {
+      title: "List Templates",
+      description: "List available pre-built Visual DNA style templates",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      try {
+        const templateDir = getTemplateDir();
+        const files = readdirSync(templateDir).filter((f) => f.endsWith(".json"));
+        const summaries = files.map((f) => {
+          const name = f.replace(".json", "");
+          const content = JSON.parse(readFileSync(join(templateDir, f), "utf8"));
+          return `- ${name}: ${content.style || "No style description"}`;
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: `Available templates:\n${summaries.join("\n")}`,
+          }],
+        };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  // --- get_template ---
+  server.registerTool(
+    "get_template",
+    {
+      title: "Get Template",
+      description: "Get the JSON contents of a Visual DNA style template",
+      inputSchema: {
+        name: z.string().describe('Template name (e.g., "cinematic_fujifilm")'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name }) => {
+      try {
+        if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+          throw new Error("Invalid template name");
+        }
+        const templatePath = join(getTemplateDir(), `${name}.json`);
+        if (!existsSync(templatePath)) {
+          throw new Error(`Template not found: ${name}`);
+        }
+        const content = readFileSync(templatePath, "utf8");
+        return { content: [{ type: "text", text: content }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
+
+  // --- Start server ---
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
