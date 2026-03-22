@@ -52,7 +52,7 @@ export function getTemplateDir() {
 
 export function loadImageParts(imagePaths) {
   if (!imagePaths || imagePaths.length === 0) {
-    throw new Error("At least one image path is required");
+    throw new Error("at least one image path is required");
   }
   if (imagePaths.length > 14) {
     throw new Error("Maximum 14 images allowed");
