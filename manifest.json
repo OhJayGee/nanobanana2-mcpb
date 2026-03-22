@@ -7,6 +7,7 @@
   "description": "Generate, edit, and analyze images using Nano Banana 2 (gemini-3.1-flash-image-preview)",
   "author": { "name": "OhJayGee" },
   "license": "MIT",
+  "icon": "icon.png",
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",
