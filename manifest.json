@@ -8,6 +8,10 @@
   "author": { "name": "OhJayGee" },
   "license": "MIT",
   "icon": "icon.png",
+  "repository": { "type": "git", "url": "https://github.com/OhJayGee/nanobanana2-mcpb" },
+  "homepage": "https://github.com/OhJayGee/nanobanana2-mcpb",
+  "support": "https://github.com/OhJayGee/nanobanana2-mcpb/issues",
+  "privacy_policies": ["https://github.com/OhJayGee/nanobanana2-mcpb/blob/main/PRIVACY.md"],
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",

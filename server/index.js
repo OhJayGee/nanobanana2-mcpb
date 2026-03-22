@@ -159,6 +159,7 @@ if (!process.env.NANOBANANA_TEST) {
     {
       title: "Generate Image",
       description: "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls",
+      annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         prompt: z.string().describe("Text description of the image to generate"),
         style: z.string().optional().describe("Artistic style instruction"),
@@ -206,6 +207,7 @@ if (!process.env.NANOBANANA_TEST) {
     {
       title: "Edit Image",
       description: "Edit existing image(s) with a text instruction while preserving unmentioned elements",
+      annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         images: z.array(z.string()).min(1).max(14).describe("File paths to input images"),
         prompt: z.string().describe("Edit instruction"),

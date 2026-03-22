@@ -21099,6 +21099,7 @@ if (!process.env.NANOBANANA_TEST) {
     {
       title: "Generate Image",
       description: "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls",
+      annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         prompt: external_exports.string().describe("Text description of the image to generate"),
         style: external_exports.string().optional().describe("Artistic style instruction"),
@@ -21142,6 +21143,7 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
     {
       title: "Edit Image",
       description: "Edit existing image(s) with a text instruction while preserving unmentioned elements",
+      annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         images: external_exports.array(external_exports.string()).min(1).max(14).describe("File paths to input images"),
         prompt: external_exports.string().describe("Edit instruction"),
