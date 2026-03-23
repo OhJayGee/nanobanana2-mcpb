@@ -20994,7 +20994,7 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-var API_TIMEOUT_MS = 6e4;
+var API_TIMEOUT_MS = 12e4;
 var OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
 function slugify(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
@@ -21109,12 +21109,13 @@ if (!process.env.NANOBANANA_TEST) {
         thinking_level: external_exports.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest, still uses some reasoning), high (complex scenes, text in images, precise adherence)")
       }
     },
-    async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }) => {
+    async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         if (style) jsonPrompt.style = style;
         if (visual_dna) jsonPrompt.visual_dna = visual_dna;
         const parts = [{ text: JSON.stringify(jsonPrompt) }];
+        await ctx.mcpReq.log("info", `Generating image: "${prompt.slice(0, 60)}..." (${image_size}, ${aspect_ratio})`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21125,6 +21126,7 @@ if (!process.env.NANOBANANA_TEST) {
         const filename = generateFilename(prompt);
         const filePath = join(OUTPUT_DIR, filename);
         writeFileSync(filePath, result.data);
+        await ctx.mcpReq.log("info", `Image saved to ${filePath}`);
         return {
           content: [{
             type: "text",
@@ -21152,11 +21154,12 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
         thinking_level: external_exports.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest, still uses some reasoning), high (complex scenes, text in images, precise adherence)")
       }
     },
-    async ({ images, prompt, aspect_ratio, image_size, thinking_level }) => {
+    async ({ images, prompt, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
         const imageParts = loadImageParts(images);
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
+        await ctx.mcpReq.log("info", `Editing ${images.length} image(s): "${prompt.slice(0, 60)}..."`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21167,6 +21170,7 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
         const filename = generateFilename(prompt);
         const filePath = join(OUTPUT_DIR, filename);
         writeFileSync(filePath, result.data);
+        await ctx.mcpReq.log("info", `Edited image saved to ${filePath}`);
         return {
           content: [{
             type: "text",
@@ -21191,11 +21195,12 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
       },
       annotations: { readOnlyHint: true }
     },
-    async ({ images }) => {
+    async ({ images }, ctx) => {
       try {
         const imageParts = loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
+        await ctx.mcpReq.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
@@ -21218,10 +21223,11 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
       },
       annotations: { readOnlyHint: true }
     },
-    async ({ images }) => {
+    async ({ images }, ctx) => {
       try {
         const imageParts = loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
+        await ctx.mcpReq.log("info", `Describing ${images.length} image(s)...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
