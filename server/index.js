@@ -158,7 +158,7 @@ if (!process.env.NANOBANANA_TEST) {
     "generate_image",
     {
       title: "Generate Image",
-      description: "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls",
+      description: "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls. Typically takes 10-30 seconds, but can take 90 seconds or more for complex prompts or high resolution.",
       annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         prompt: z.string().describe("Text description of the image to generate"),
@@ -208,7 +208,7 @@ if (!process.env.NANOBANANA_TEST) {
     "edit_image",
     {
       title: "Edit Image",
-      description: "Edit existing image(s) with a text instruction while preserving unmentioned elements",
+      description: "Edit existing image(s) with a text instruction while preserving unmentioned elements. Typically takes 10-30 seconds, but can take 90 seconds or more.",
       annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         images: z.array(z.string()).min(1).max(14).describe("File paths to input images"),
