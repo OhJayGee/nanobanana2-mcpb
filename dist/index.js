@@ -20994,7 +20994,6 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-var API_TIMEOUT_MS = 12e4;
 var OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
 function slugify(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
@@ -21057,8 +21056,7 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
   const response = await fetch(`${endpoint}?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    body: JSON.stringify(body)
   });
   if (!response.ok) {
     const errorText = await response.text();

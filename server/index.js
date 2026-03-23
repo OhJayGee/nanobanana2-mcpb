@@ -15,7 +15,8 @@ const __dirname = dirname(__filename);
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-const API_TIMEOUT_MS = 120_000;
+// No server-side timeout — let the MCP client (Claude Desktop) manage timeouts.
+// Our log notifications keep the client informed that work is in progress.
 
 const OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
 
@@ -103,7 +104,6 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
 
   if (!response.ok) {
