@@ -3,7 +3,31 @@ import { strict as assert } from "node:assert";
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { slugify, detectMimeType, generateFilename, callGeminiAPI, createJob, completeJob, failJob, getJob, getAllJobs, estimateSeconds, recordActualTime, getSampleCount, pruneJobs, loadEstimates, saveEstimates, getEstimatesFile, isValidTemplateName, loadImageParts } from "../server/index.js";
+import { slugify, detectMimeType, generateFilename, callGeminiAPI, createJob, completeJob, failJob, getJob, getAllJobs, estimateSeconds, recordActualTime, getSampleCount, pruneJobs, loadEstimates, saveEstimates, getEstimatesFile, isValidTemplateName, loadImageParts, resolveHome } from "../server/index.js";
+
+describe("resolveHome", () => {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+
+  it("resolves ${HOME} prefix", () => {
+    assert.equal(resolveHome("${HOME}/Pictures"), `${home}/Pictures`);
+  });
+
+  it("resolves $(HOME) prefix", () => {
+    assert.equal(resolveHome("$(HOME)/Pictures"), `${home}/Pictures`);
+  });
+
+  it("resolves ~ prefix", () => {
+    assert.equal(resolveHome("~/Desktop"), `${home}/Desktop`);
+  });
+
+  it("leaves already-resolved absolute paths unchanged", () => {
+    assert.equal(resolveHome("/Users/alice/Pictures"), "/Users/alice/Pictures");
+  });
+
+  it("only replaces at the start, not mid-path", () => {
+    assert.equal(resolveHome("/tmp/${HOME}/foo"), "/tmp/${HOME}/foo");
+  });
+});
 
 describe("slugify", () => {
   it("lowercases and replaces non-alphanumeric with hyphens", () => {

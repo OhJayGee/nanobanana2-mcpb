@@ -20994,7 +20994,11 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-var OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || process.env.USERPROFILE || "", "Desktop", "nanobanana-output");
+var HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
+function resolveHome(p) {
+  return p.replace(/^\$\{HOME\}/, HOME_DIR).replace(/^\$\(HOME\)/, HOME_DIR).replace(/^~/, HOME_DIR);
+}
+var OUTPUT_DIR = resolveHome(process.env.OUTPUT_DIR || join(HOME_DIR, "Desktop", "nanobanana-output"));
 var EMA_ALPHA = 0.25;
 var MARGIN_FACTOR = 1.5;
 var ESTIMATE_PRIORS = {
@@ -21233,7 +21237,7 @@ if (!process.env.NANOBANANA_TEST) {
         }).catch((err) => {
           failJob(jobId, err.message);
         });
-        await ctx.mcpReq.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
+        await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
         return {
           content: [{
             type: "text",
@@ -21287,7 +21291,7 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         }).catch((err) => {
           failJob(jobId, err.message);
         });
-        await ctx.mcpReq.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
+        await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
         return {
           content: [{
             type: "text",
@@ -21404,7 +21408,7 @@ Prompt: ${job.prompt}`
         const imageParts = loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
-        await ctx.mcpReq.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
+        await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
@@ -21431,7 +21435,7 @@ Prompt: ${job.prompt}`
       try {
         const imageParts = loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
-        await ctx.mcpReq.log("info", `Describing ${images.length} image(s)...`);
+        await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
@@ -21521,6 +21525,7 @@ export {
   loadImageParts,
   pruneJobs,
   recordActualTime,
+  resolveHome,
   saveEstimates,
   slugify
 };

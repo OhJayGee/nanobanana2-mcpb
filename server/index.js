@@ -18,7 +18,18 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models
 // No server-side timeout — let the MCP client (Claude Desktop) manage timeouts.
 // Our log notifications keep the client informed that work is in progress.
 
-const OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || process.env.USERPROFILE || "", "Desktop", "nanobanana-output");
+const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
+
+// Resolve any unsubstituted home directory placeholders that the MCPB runtime
+// may pass through literally (e.g. ${HOME}, $(HOME), ~).
+export function resolveHome(p) {
+  return p
+    .replace(/^\$\{HOME\}/,  HOME_DIR)
+    .replace(/^\$\(HOME\)/,  HOME_DIR)
+    .replace(/^~/,           HOME_DIR);
+}
+
+const OUTPUT_DIR = resolveHome(process.env.OUTPUT_DIR || join(HOME_DIR, "Desktop", "nanobanana-output"));
 
 // ---------------------------------------------------------------------------
 // Generation time heuristic
@@ -345,7 +356,7 @@ if (!process.env.NANOBANANA_TEST) {
           failJob(jobId, err.message);
         });
 
-        await ctx.mcpReq.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`);
+        await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`);
 
         return {
           content: [{
@@ -403,7 +414,7 @@ if (!process.env.NANOBANANA_TEST) {
           failJob(jobId, err.message);
         });
 
-        await ctx.mcpReq.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`);
+        await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`);
 
         return {
           content: [{
@@ -523,7 +534,7 @@ if (!process.env.NANOBANANA_TEST) {
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
 
-        await ctx.mcpReq.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
+        await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
@@ -554,7 +565,7 @@ if (!process.env.NANOBANANA_TEST) {
         const imageParts = loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
 
-        await ctx.mcpReq.log("info", `Describing ${images.length} image(s)...`);
+        await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
