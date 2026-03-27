@@ -3,7 +3,16 @@ import { strict as assert } from "node:assert";
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { slugify, detectMimeType, generateFilename, callGeminiAPI, createJob, completeJob, failJob, getJob, getAllJobs, estimateSeconds, recordActualTime, getSampleCount, pruneJobs, loadEstimates, saveEstimates, getEstimatesFile, isValidTemplateName, loadImageParts, resolveHome } from "../server/index.js";
+import { slugify, detectMimeType, generateFilename, callGeminiAPI, createJob, completeJob, failJob, getJob, getAllJobs, estimateSeconds, recordActualTime, getSampleCount, pruneJobs, loadEstimates, saveEstimates, getEstimatesFile, isValidTemplateName, loadImageParts, assertPathAllowed, resolveHome, getOutputDir } from "../server/index.js";
+
+describe("getOutputDir", () => {
+  it("reflects OUTPUT_DIR env var at call time (lazy evaluation)", () => {
+    const origOutputDir = process.env.OUTPUT_DIR;
+    process.env.OUTPUT_DIR = "/tmp/nanobanana-lazy-test";
+    assert.equal(getOutputDir(), "/tmp/nanobanana-lazy-test");
+    process.env.OUTPUT_DIR = origOutputDir || "";
+  });
+});
 
 describe("resolveHome", () => {
   const home = process.env.HOME || process.env.USERPROFILE || "";
@@ -164,6 +173,17 @@ describe("job queue", () => {
     assert.ok(getJob("prune-processing"), "processing job should be kept");
     assert.ok(getJob("prune-recent"), "recent finished job should be kept");
   });
+
+  it("pruneJobs does not delete a non-processing job with null completedAt", () => {
+    createJob("prune-null-completed", "/tmp/x.png", "null completedAt", 30, "1K", "minimal");
+    const job = getJob("prune-null-completed");
+    job.status = "failed";
+    job.completedAt = null; // simulate missing completedAt
+
+    pruneJobs();
+
+    assert.ok(getJob("prune-null-completed"), "job with null completedAt should not be pruned");
+  });
 });
 
 describe("recordActualTime", () => {
@@ -227,6 +247,32 @@ describe("callGeminiAPI", () => {
       assert.equal(capturedBody.generationConfig.candidateCount, 1);
       assert.equal(capturedBody.generationConfig.thinkingConfig.thinkingLevel, "high");
       assert.equal(capturedBody.generationConfig.thinkingConfig.includeThoughts, true);
+    } finally {
+      globalThis.fetch = origFetch;
+      delete process.env.GEMINI_API_KEY;
+    }
+  });
+
+  it("sends API key in x-goog-api-key header, not as URL query param", async () => {
+    const origFetch = globalThis.fetch;
+    let capturedUrl;
+    let capturedHeaders;
+    globalThis.fetch = async (url, opts) => {
+      capturedUrl = url;
+      capturedHeaders = opts.headers;
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: "hi" }] } }]
+        })
+      };
+    };
+    process.env.GEMINI_API_KEY = "secret-api-key";
+
+    try {
+      await callGeminiAPI({ parts: [{ text: "test" }], modalities: ["TEXT"], thinkingLevel: "minimal", includeThoughts: false });
+      assert.ok(!capturedUrl.includes("secret-api-key"), "API key must not appear in URL");
+      assert.equal(capturedHeaders["x-goog-api-key"], "secret-api-key");
     } finally {
       globalThis.fetch = origFetch;
       delete process.env.GEMINI_API_KEY;
@@ -527,6 +573,7 @@ describe("isValidTemplateName", () => {
   it("accepts a normal template name", () => {
     assert.ok(isValidTemplateName("cinematic_fujifilm"));
     assert.ok(isValidTemplateName("my-template"));
+    assert.ok(isValidTemplateName("template123"));
   });
 
   it("rejects names with forward slash", () => {
@@ -541,21 +588,61 @@ describe("isValidTemplateName", () => {
   it("rejects names with double dot", () => {
     assert.equal(isValidTemplateName("..hidden"), false);
   });
+
+  it("rejects names with spaces or special characters", () => {
+    assert.equal(isValidTemplateName("foo bar"), false);
+    assert.equal(isValidTemplateName("foo.bar"), false);
+    assert.equal(isValidTemplateName("foo;bar"), false);
+  });
+});
+
+describe("assertPathAllowed", () => {
+  it("allows image files with standard extensions", () => {
+    assert.doesNotThrow(() => assertPathAllowed("/some/path/photo.png"));
+    assert.doesNotThrow(() => assertPathAllowed("/some/path/photo.jpg"));
+    assert.doesNotThrow(() => assertPathAllowed("/some/path/photo.webp"));
+    assert.doesNotThrow(() => assertPathAllowed("/some/path/photo.heic"));
+  });
+
+  it("rejects non-image files", () => {
+    assert.throws(() => assertPathAllowed("/etc/passwd"), /Access denied/);
+    assert.throws(() => assertPathAllowed("/home/user/.ssh/id_rsa"), /Access denied/);
+    assert.throws(() => assertPathAllowed("/home/user/file.txt"), /Access denied/);
+  });
+
+  it("rejects relative path traversal targeting non-image files", () => {
+    assert.throws(() => assertPathAllowed("../../etc/passwd"), /Access denied/);
+  });
 });
 
 describe("loadImageParts success path", () => {
   const tmpFile = join(tmpdir(), "nanobanana-test.png");
 
-  it("returns inlineData with correct mimeType and base64 data", () => {
+  it("returns inlineData with correct mimeType and base64 data", async () => {
     const fakeData = Buffer.from("fake-png-bytes");
     writeFileSync(tmpFile, fakeData);
 
-    const parts = loadImageParts([tmpFile]);
+    const parts = await loadImageParts([tmpFile]);
     assert.equal(parts.length, 1);
     assert.equal(parts[0].inlineData.mimeType, "image/png");
     assert.equal(parts[0].inlineData.data, fakeData.toString("base64"));
 
     unlinkSync(tmpFile);
+  });
+
+  it("rejects non-image file paths", async () => {
+    await assert.rejects(
+      () => loadImageParts(["/etc/passwd"]),
+      /Access denied/
+    );
+  });
+
+  it("throws when no paths provided", async () => {
+    await assert.rejects(() => loadImageParts([]), /at least one image path/);
+  });
+
+  it("throws when too many images", async () => {
+    await assert.rejects(() => loadImageParts(new Array(15).fill("/tmp/x.png")), /Maximum 14/);
   });
 });
 
@@ -596,6 +683,36 @@ describe("loadEstimates / saveEstimates", () => {
     mkdirSync(testDir, { recursive: true });
     writeFileSync(getEstimatesFile(), "{ not valid json ~~");
     assert.doesNotThrow(() => loadEstimates());
+    unlinkSync(getEstimatesFile());
+    process.env.OUTPUT_DIR = origOutputDir || "";
+  });
+
+  it("loadEstimates ignores table with wrong structure (missing sizes)", () => {
+    process.env.OUTPUT_DIR = testDir;
+    mkdirSync(testDir, { recursive: true });
+    const before = estimateSeconds("1K", "minimal");
+    // table missing required sizes
+    writeFileSync(getEstimatesFile(), JSON.stringify({ table: { "1K": { minimal: 999 } } }));
+    loadEstimates();
+    // estimate should NOT change since schema is invalid (missing "0.5K", "2K", "4K")
+    assert.equal(estimateSeconds("1K", "minimal"), before);
+    unlinkSync(getEstimatesFile());
+    process.env.OUTPUT_DIR = origOutputDir || "";
+  });
+
+  it("loadEstimates ignores table with non-number values", () => {
+    process.env.OUTPUT_DIR = testDir;
+    mkdirSync(testDir, { recursive: true });
+    const before = estimateSeconds("2K", "minimal");
+    const badTable = {
+      "0.5K": { minimal: 20, high: 30 },
+      "1K": { minimal: 30, high: 45 },
+      "2K": { minimal: "fast", high: 75 }, // non-number
+      "4K": { minimal: 90, high: 135 },
+    };
+    writeFileSync(getEstimatesFile(), JSON.stringify({ table: badTable }));
+    loadEstimates();
+    assert.equal(estimateSeconds("2K", "minimal"), before);
     unlinkSync(getEstimatesFile());
     process.env.OUTPUT_DIR = origOutputDir || "";
   });

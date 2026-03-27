@@ -2980,7 +2980,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3007,7 +3007,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3582,7 +3582,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3809,7 +3809,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -18870,7 +18870,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -18887,7 +18887,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -18965,7 +18965,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -19226,12 +19226,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -20331,7 +20331,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -20974,12 +20974,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
@@ -20987,7 +20987,8 @@ var StdioServerTransport = class {
 
 // server/index.js
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 var __filename = fileURLToPath(import.meta.url);
@@ -20995,10 +20996,15 @@ var __dirname = dirname(__filename);
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
+if (!HOME_DIR) {
+  throw new Error("Cannot determine home directory: HOME and USERPROFILE are both unset.");
+}
 function resolveHome(p) {
   return p.replace(/^\$\{HOME\}/, HOME_DIR).replace(/^\$\(HOME\)/, HOME_DIR).replace(/^~/, HOME_DIR);
 }
-var OUTPUT_DIR = resolveHome(process.env.OUTPUT_DIR || join(HOME_DIR, "Desktop", "nanobanana-output"));
+function getOutputDir() {
+  return resolveHome(process.env.OUTPUT_DIR || join(HOME_DIR, "Desktop", "nanobanana-output"));
+}
 var EMA_ALPHA = 0.25;
 var MARGIN_FACTOR = 1.5;
 var ESTIMATE_PRIORS = {
@@ -21010,19 +21016,28 @@ var ESTIMATE_PRIORS = {
 var estimateTable = JSON.parse(JSON.stringify(ESTIMATE_PRIORS));
 var sampleCounts = { "0.5K": {}, "1K": {}, "2K": {}, "4K": {} };
 function getEstimatesFile() {
-  return join(OUTPUT_DIR, ".nanobanana-estimates.json");
+  return join(getOutputDir(), ".nanobanana-estimates.json");
 }
 function loadEstimates() {
   try {
     const raw = JSON.parse(readFileSync(getEstimatesFile(), "utf8"));
-    if (raw.table) estimateTable = raw.table;
-    if (raw.samples) sampleCounts = raw.samples;
+    const validSizes = ["0.5K", "1K", "2K", "4K"];
+    const validLevels = ["minimal", "high"];
+    if (raw.table && typeof raw.table === "object" && !Array.isArray(raw.table)) {
+      const allValid = validSizes.every(
+        (s) => raw.table[s] && validLevels.every((l) => typeof raw.table[s][l] === "number")
+      );
+      if (allValid) estimateTable = raw.table;
+    }
+    if (raw.samples && typeof raw.samples === "object" && !Array.isArray(raw.samples)) {
+      sampleCounts = raw.samples;
+    }
   } catch {
   }
 }
 function saveEstimates() {
   try {
-    mkdirSync(OUTPUT_DIR, { recursive: true });
+    mkdirSync(getOutputDir(), { recursive: true });
     writeFileSync(getEstimatesFile(), JSON.stringify({ table: estimateTable, samples: sampleCounts }, null, 2));
   } catch {
   }
@@ -21049,7 +21064,7 @@ var JOB_TTL_MS = 30 * 60 * 1e3;
 function pruneJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, job] of jobs) {
-    if (job.status !== "processing" && job.completedAt < cutoff) {
+    if (job.status !== "processing" && job.completedAt !== null && job.completedAt < cutoff) {
       jobs.delete(id);
     }
   }
@@ -21099,30 +21114,41 @@ function getTemplateDir() {
   return join(__dirname, "..", "assets", "templates");
 }
 function isValidTemplateName(name) {
-  return !name.includes("/") && !name.includes("\\") && !name.includes("..");
+  return /^[a-zA-Z0-9_-]+$/.test(name);
 }
-function loadImageParts(imagePaths) {
+var ALLOWED_IMAGE_EXTENSIONS = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif"]);
+function assertPathAllowed(p) {
+  const abs = resolve(p);
+  const ext = abs.toLowerCase().split(".").pop();
+  if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
+    throw new Error(`Access denied: only image files are allowed (jpg, png, webp, etc.). Got: ${p}`);
+  }
+}
+async function loadImageParts(imagePaths) {
   if (!imagePaths || imagePaths.length === 0) {
     throw new Error("at least one image path is required");
   }
   if (imagePaths.length > 14) {
     throw new Error("Maximum 14 images allowed");
   }
-  return imagePaths.map((imgPath) => {
-    if (!existsSync(imgPath)) {
-      throw new Error(`Image file not found: ${imgPath}`);
-    }
-    const buffer = readFileSync(imgPath);
-    return {
-      inlineData: {
-        mimeType: detectMimeType(imgPath),
-        data: buffer.toString("base64")
+  return Promise.all(
+    imagePaths.map(async (imgPath) => {
+      assertPathAllowed(imgPath);
+      if (!existsSync(imgPath)) {
+        throw new Error(`Image file not found: ${imgPath}`);
       }
-    };
-  });
+      const buffer = await readFile(imgPath);
+      return {
+        inlineData: {
+          mimeType: detectMimeType(imgPath),
+          data: buffer.toString("base64")
+        }
+      };
+    })
+  );
 }
 function ensureOutputDir() {
-  mkdirSync(OUTPUT_DIR, { recursive: true });
+  mkdirSync(getOutputDir(), { recursive: true });
 }
 async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts }) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -21141,9 +21167,9 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
     }
   };
   const endpoint = `${GEMINI_BASE_URL}/${GEMINI_MODEL}:generateContent`;
-  const response = await fetch(`${endpoint}?key=${apiKey}`, {
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(body)
   });
   if (!response.ok) {
@@ -21218,7 +21244,7 @@ if (!process.env.NANOBANANA_TEST) {
       try {
         ensureOutputDir();
         const filename = generateFilename(prompt);
-        const filePath = join(OUTPUT_DIR, filename);
+        const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         if (style) jsonPrompt.style = style;
@@ -21271,10 +21297,10 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
     },
     async ({ images, prompt, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
-        const imageParts = loadImageParts(images);
+        const imageParts = await loadImageParts(images);
         ensureOutputDir();
         const filename = generateFilename(prompt);
-        const filePath = join(OUTPUT_DIR, filename);
+        const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
@@ -21405,7 +21431,7 @@ Prompt: ${job.prompt}`
     },
     async ({ images }, ctx) => {
       try {
-        const imageParts = loadImageParts(images);
+        const imageParts = await loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
         await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
@@ -21433,7 +21459,7 @@ Prompt: ${job.prompt}`
     },
     async ({ images }, ctx) => {
       try {
-        const imageParts = loadImageParts(images);
+        const imageParts = await loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
         await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);
         const result = await callGeminiAPI({
@@ -21507,6 +21533,7 @@ ${summaries.join("\n")}`
   await server.connect(transport);
 }
 export {
+  assertPathAllowed,
   callGeminiAPI,
   completeJob,
   createJob,
@@ -21518,6 +21545,7 @@ export {
   getAllJobs,
   getEstimatesFile,
   getJob,
+  getOutputDir,
   getSampleCount,
   getTemplateDir,
   isValidTemplateName,

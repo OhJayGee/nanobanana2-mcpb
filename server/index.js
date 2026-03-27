@@ -2,7 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +20,9 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models
 // Our log notifications keep the client informed that work is in progress.
 
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
+if (!HOME_DIR) {
+  throw new Error("Cannot determine home directory: HOME and USERPROFILE are both unset.");
+}
 
 // Resolve any unsubstituted home directory placeholders that the MCPB runtime
 // may pass through literally (e.g. ${HOME}, $(HOME), ~).
@@ -29,7 +33,9 @@ export function resolveHome(p) {
     .replace(/^~/,           HOME_DIR);
 }
 
-const OUTPUT_DIR = resolveHome(process.env.OUTPUT_DIR || join(HOME_DIR, "Desktop", "nanobanana-output"));
+export function getOutputDir() {
+  return resolveHome(process.env.OUTPUT_DIR || join(HOME_DIR, "Desktop", "nanobanana-output"));
+}
 
 // ---------------------------------------------------------------------------
 // Generation time heuristic
@@ -55,14 +61,23 @@ let estimateTable = JSON.parse(JSON.stringify(ESTIMATE_PRIORS));
 let sampleCounts = { "0.5K": {}, "1K": {}, "2K": {}, "4K": {} };
 
 export function getEstimatesFile() {
-  return join(OUTPUT_DIR, ".nanobanana-estimates.json");
+  return join(getOutputDir(), ".nanobanana-estimates.json");
 }
 
 export function loadEstimates() {
   try {
     const raw = JSON.parse(readFileSync(getEstimatesFile(), "utf8"));
-    if (raw.table) estimateTable = raw.table;
-    if (raw.samples) sampleCounts = raw.samples;
+    const validSizes = ["0.5K", "1K", "2K", "4K"];
+    const validLevels = ["minimal", "high"];
+    if (raw.table && typeof raw.table === "object" && !Array.isArray(raw.table)) {
+      const allValid = validSizes.every(
+        (s) => raw.table[s] && validLevels.every((l) => typeof raw.table[s][l] === "number")
+      );
+      if (allValid) estimateTable = raw.table;
+    }
+    if (raw.samples && typeof raw.samples === "object" && !Array.isArray(raw.samples)) {
+      sampleCounts = raw.samples;
+    }
   } catch {
     // File not found or corrupt — stay with priors, no error needed.
   }
@@ -70,7 +85,7 @@ export function loadEstimates() {
 
 export function saveEstimates() {
   try {
-    mkdirSync(OUTPUT_DIR, { recursive: true });
+    mkdirSync(getOutputDir(), { recursive: true });
     writeFileSync(getEstimatesFile(), JSON.stringify({ table: estimateTable, samples: sampleCounts }, null, 2));
   } catch {
     // Non-fatal — worst case we lose this session's learning.
@@ -113,7 +128,7 @@ export function pruneJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, job] of jobs) {
     // Only prune finished jobs; keep processing jobs regardless of age.
-    if (job.status !== "processing" && job.completedAt < cutoff) {
+    if (job.status !== "processing" && job.completedAt !== null && job.completedAt < cutoff) {
       jobs.delete(id);
     }
   }
@@ -182,32 +197,45 @@ export function getTemplateDir() {
 }
 
 export function isValidTemplateName(name) {
-  return !name.includes("/") && !name.includes("\\") && !name.includes("..");
+  return /^[a-zA-Z0-9_-]+$/.test(name);
 }
 
-export function loadImageParts(imagePaths) {
+const ALLOWED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "avif"]);
+
+export function assertPathAllowed(p) {
+  const abs = resolve(p);
+  const ext = abs.toLowerCase().split(".").pop();
+  if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
+    throw new Error(`Access denied: only image files are allowed (jpg, png, webp, etc.). Got: ${p}`);
+  }
+}
+
+export async function loadImageParts(imagePaths) {
   if (!imagePaths || imagePaths.length === 0) {
     throw new Error("at least one image path is required");
   }
   if (imagePaths.length > 14) {
     throw new Error("Maximum 14 images allowed");
   }
-  return imagePaths.map((imgPath) => {
-    if (!existsSync(imgPath)) {
-      throw new Error(`Image file not found: ${imgPath}`);
-    }
-    const buffer = readFileSync(imgPath);
-    return {
-      inlineData: {
-        mimeType: detectMimeType(imgPath),
-        data: buffer.toString("base64"),
-      },
-    };
-  });
+  return Promise.all(
+    imagePaths.map(async (imgPath) => {
+      assertPathAllowed(imgPath);
+      if (!existsSync(imgPath)) {
+        throw new Error(`Image file not found: ${imgPath}`);
+      }
+      const buffer = await readFile(imgPath);
+      return {
+        inlineData: {
+          mimeType: detectMimeType(imgPath),
+          data: buffer.toString("base64"),
+        },
+      };
+    })
+  );
 }
 
 export function ensureOutputDir() {
-  mkdirSync(OUTPUT_DIR, { recursive: true });
+  mkdirSync(getOutputDir(), { recursive: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -234,9 +262,9 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
 
   const endpoint = `${GEMINI_BASE_URL}/${GEMINI_MODEL}:generateContent`;
 
-  const response = await fetch(`${endpoint}?key=${apiKey}`, {
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(body),
   });
 
@@ -331,7 +359,7 @@ if (!process.env.NANOBANANA_TEST) {
       try {
         ensureOutputDir();
         const filename = generateFilename(prompt);
-        const filePath = join(OUTPUT_DIR, filename);
+        const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
 
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
@@ -387,12 +415,12 @@ if (!process.env.NANOBANANA_TEST) {
     },
     async ({ images, prompt, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
-        // Validate images synchronously before queuing (fast, catches bad paths early)
-        const imageParts = loadImageParts(images);
+        // Validate images before queuing (catches bad paths and non-image files early)
+        const imageParts = await loadImageParts(images);
 
         ensureOutputDir();
         const filename = generateFilename(prompt);
-        const filePath = join(OUTPUT_DIR, filename);
+        const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
 
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
@@ -530,7 +558,7 @@ if (!process.env.NANOBANANA_TEST) {
     },
     async ({ images }, ctx) => {
       try {
-        const imageParts = loadImageParts(images);
+        const imageParts = await loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
 
@@ -562,7 +590,7 @@ if (!process.env.NANOBANANA_TEST) {
     },
     async ({ images }, ctx) => {
       try {
-        const imageParts = loadImageParts(images);
+        const imageParts = await loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
 
         await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);

@@ -23,16 +23,16 @@ describe("integration: template files exist", () => {
 });
 
 describe("integration: loadImageParts validation", () => {
-  it("throws on empty array", () => {
-    assert.throws(() => loadImageParts([]), { message: /at least one/ });
+  it("throws on empty array", async () => {
+    await assert.rejects(() => loadImageParts([]), { message: /at least one/ });
   });
 
-  it("throws on non-existent file", () => {
-    assert.throws(() => loadImageParts(["/nonexistent/fake.png"]), { message: /not found/ });
+  it("throws on non-existent file", async () => {
+    await assert.rejects(() => loadImageParts(["/nonexistent/fake.png"]), { message: /not found/ });
   });
 
-  it("throws on more than 14 images", () => {
+  it("throws on more than 14 images", async () => {
     const paths = Array(15).fill("/fake.png");
-    assert.throws(() => loadImageParts(paths), { message: /14/ });
+    await assert.rejects(() => loadImageParts(paths), { message: /14/ });
   });
 });
