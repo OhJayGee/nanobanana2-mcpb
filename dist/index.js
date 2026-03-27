@@ -20986,7 +20986,7 @@ var StdioServerTransport = class {
 };
 
 // server/index.js
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -20995,6 +20995,41 @@ var __dirname = dirname(__filename);
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
+var ESTIMATE_TABLE = {
+  //              minimal  high
+  "0.5K": { minimal: 20, high: 30 },
+  "1K": { minimal: 30, high: 45 },
+  "2K": { minimal: 50, high: 75 },
+  "4K": { minimal: 90, high: 135 }
+};
+function estimateSeconds(image_size, thinking_level) {
+  return ESTIMATE_TABLE[image_size]?.[thinking_level] ?? 45;
+}
+var jobs = /* @__PURE__ */ new Map();
+function createJob(jobId, filePath, prompt, estimatedSeconds) {
+  jobs.set(jobId, { status: "processing", filePath, prompt, error: null, startedAt: Date.now(), estimatedSeconds, completedAt: null });
+}
+function completeJob(jobId) {
+  const job = jobs.get(jobId);
+  if (job) {
+    job.status = "complete";
+    job.completedAt = Date.now();
+  }
+}
+function failJob(jobId, error2) {
+  const job = jobs.get(jobId);
+  if (job) {
+    job.status = "failed";
+    job.error = error2;
+    job.completedAt = Date.now();
+  }
+}
+function getJob(jobId) {
+  return jobs.get(jobId) || null;
+}
+function getAllJobs() {
+  return Object.fromEntries(jobs);
+}
 function slugify(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
 }
@@ -21096,7 +21131,7 @@ if (!process.env.NANOBANANA_TEST) {
     "generate_image",
     {
       title: "Generate Image",
-      description: "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls. Typically takes 10-30 seconds, but can take 90 seconds or more for complex prompts or high resolution.",
+      description: "Queue image generation from a text prompt. Returns immediately with a job_id and the planned output file path. The image is generated asynchronously in the background \u2014 use check_generation with the job_id to poll for completion. Typical generation time is 10-30 seconds, but can take 90+ seconds for complex prompts or high resolution.",
       annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         prompt: external_exports.string().describe("Text description of the image to generate"),
@@ -21109,28 +21144,38 @@ if (!process.env.NANOBANANA_TEST) {
     },
     async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
+        ensureOutputDir();
+        const filename = generateFilename(prompt);
+        const filePath = join(OUTPUT_DIR, filename);
+        const jobId = randomBytes(6).toString("hex");
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         if (style) jsonPrompt.style = style;
         if (visual_dna) jsonPrompt.visual_dna = visual_dna;
         const parts = [{ text: JSON.stringify(jsonPrompt) }];
-        await ctx.mcpReq.log("info", `Generating image: "${prompt.slice(0, 60)}..." (${image_size}, ${aspect_ratio})`);
-        const result = await callGeminiAPI({
+        const estimated = estimateSeconds(image_size, thinking_level);
+        createJob(jobId, filePath, prompt, estimated);
+        callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
           thinkingLevel: thinking_level,
           includeThoughts: true
+        }).then((result) => {
+          writeFileSync(filePath, result.data);
+          completeJob(jobId);
+        }).catch((err) => {
+          failJob(jobId, err.message);
         });
-        ensureOutputDir();
-        const filename = generateFilename(prompt);
-        const filePath = join(OUTPUT_DIR, filename);
-        writeFileSync(filePath, result.data);
-        await ctx.mcpReq.log("info", `Image saved to ${filePath}`);
+        await ctx.mcpReq.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
         return {
           content: [{
             type: "text",
-            text: `Image saved to ${filePath}
+            text: `Image generation queued.
+job_id: ${jobId}
+output_path: ${filePath}
 Prompt: ${prompt}
-Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
+Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}
+
+Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) after that interval. Re-poll every 15s if still processing.`
           }]
         };
       } catch (err) {
@@ -21142,7 +21187,7 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
     "edit_image",
     {
       title: "Edit Image",
-      description: "Edit existing image(s) with a text instruction while preserving unmentioned elements. Typically takes 10-30 seconds, but can take 90 seconds or more.",
+      description: "Queue image editing with a text instruction while preserving unmentioned elements. Returns immediately with a job_id and the planned output file path. The edit runs asynchronously \u2014 use check_generation with the job_id to poll for completion. Typical time is 10-30 seconds, but can take 90+ seconds.",
       annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         images: external_exports.array(external_exports.string()).min(1).max(14).describe("File paths to input images"),
@@ -21155,32 +21200,121 @@ Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
     async ({ images, prompt, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
         const imageParts = loadImageParts(images);
+        ensureOutputDir();
+        const filename = generateFilename(prompt);
+        const filePath = join(OUTPUT_DIR, filename);
+        const jobId = randomBytes(6).toString("hex");
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
-        await ctx.mcpReq.log("info", `Editing ${images.length} image(s): "${prompt.slice(0, 60)}..."`);
-        const result = await callGeminiAPI({
+        const estimated = estimateSeconds(image_size, thinking_level);
+        createJob(jobId, filePath, prompt, estimated);
+        callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
           thinkingLevel: thinking_level,
           includeThoughts: true
+        }).then((result) => {
+          writeFileSync(filePath, result.data);
+          completeJob(jobId);
+        }).catch((err) => {
+          failJob(jobId, err.message);
         });
-        ensureOutputDir();
-        const filename = generateFilename(prompt);
-        const filePath = join(OUTPUT_DIR, filename);
-        writeFileSync(filePath, result.data);
-        await ctx.mcpReq.log("info", `Edited image saved to ${filePath}`);
+        await ctx.mcpReq.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
         return {
           content: [{
             type: "text",
-            text: `Edited image saved to ${filePath}
+            text: `Image edit queued.
+job_id: ${jobId}
+output_path: ${filePath}
 Instruction: ${prompt}
 Source images: ${images.join(", ")}
-Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}`
+Aspect: ${aspect_ratio} | Size: ${image_size} | Thinking: ${thinking_level}
+
+Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) after that interval. Re-poll every 15s if still processing.`
           }]
         };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
       }
+    }
+  );
+  server.registerTool(
+    "check_generation",
+    {
+      title: "Check Generation Status",
+      description: "Check the status of an async image generation or edit job. Returns status (processing/complete/failed), elapsed time, and file details when complete. Call this after generate_image or edit_image to poll for completion. If no job_id is provided, returns status of all recent jobs.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        job_id: external_exports.string().optional().describe("Job ID returned by generate_image or edit_image. Omit to list all jobs.")
+      }
+    },
+    async ({ job_id }) => {
+      if (!job_id) {
+        const allJobs = getAllJobs();
+        const entries = Object.entries(allJobs);
+        if (entries.length === 0) {
+          return { content: [{ type: "text", text: "No jobs found." }] };
+        }
+        const lines = entries.map(([id, j]) => {
+          const elapsed2 = j.completedAt ? ((j.completedAt - j.startedAt) / 1e3).toFixed(1) : ((Date.now() - j.startedAt) / 1e3).toFixed(1);
+          let line = `${id}: ${j.status} (${elapsed2}s`;
+          if (j.estimatedSeconds && j.status === "processing") {
+            const rem = Math.max(0, j.estimatedSeconds - parseFloat(elapsed2));
+            line += `, ~${rem.toFixed(0)}s remaining`;
+          }
+          line += `) \u2014 ${j.prompt.slice(0, 50)}`;
+          if (j.status === "complete") line += ` \u2192 ${j.filePath}`;
+          if (j.status === "failed") line += ` \u2014 Error: ${j.error}`;
+          return line;
+        });
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+      const job = getJob(job_id);
+      if (!job) {
+        return { content: [{ type: "text", text: `No job found with id: ${job_id}` }], isError: true };
+      }
+      const elapsed = job.completedAt ? ((job.completedAt - job.startedAt) / 1e3).toFixed(1) : ((Date.now() - job.startedAt) / 1e3).toFixed(1);
+      const estNote = job.estimatedSeconds ? ` (estimated ~${job.estimatedSeconds}s)` : "";
+      if (job.status === "complete") {
+        let fileInfo = `File: ${job.filePath}`;
+        if (existsSync(job.filePath)) {
+          const stats = statSync(job.filePath);
+          fileInfo += ` (${(stats.size / 1024).toFixed(0)} KB)`;
+        }
+        return {
+          content: [{
+            type: "text",
+            text: `Status: complete
+Actual time: ${elapsed}s${estNote}
+${fileInfo}
+Prompt: ${job.prompt}`
+          }]
+        };
+      }
+      if (job.status === "failed") {
+        return {
+          content: [{
+            type: "text",
+            text: `Status: failed
+Elapsed: ${elapsed}s${estNote}
+Error: ${job.error}
+Prompt: ${job.prompt}`
+          }],
+          isError: true
+        };
+      }
+      const remaining = job.estimatedSeconds ? Math.max(0, job.estimatedSeconds - parseFloat(elapsed)) : null;
+      const remainingNote = remaining !== null ? `
+Estimated remaining: ~${remaining.toFixed(0)}s` : "";
+      return {
+        content: [{
+          type: "text",
+          text: `Status: processing
+Elapsed: ${elapsed}s${estNote}${remainingNote}
+Output will be saved to: ${job.filePath}
+Prompt: ${job.prompt}`
+        }]
+      };
     }
   );
   server.registerTool(
@@ -21298,9 +21432,15 @@ ${summaries.join("\n")}`
 }
 export {
   callGeminiAPI,
+  completeJob,
+  createJob,
   detectMimeType,
   ensureOutputDir,
+  estimateSeconds,
+  failJob,
   generateFilename,
+  getAllJobs,
+  getJob,
   getTemplateDir,
   loadImageParts,
   slugify
