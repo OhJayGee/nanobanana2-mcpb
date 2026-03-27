@@ -50,6 +50,7 @@
   "tools": [
     { "name": "generate_image", "description": "Generate an image from a text prompt with optional style, visual DNA, aspect ratio, and resolution controls" },
     { "name": "edit_image", "description": "Edit existing image(s) with a text instruction while preserving unmentioned elements" },
+    { "name": "check_generation", "description": "Check the status of an async image generation or edit job" },
     { "name": "extract_visual_dna", "description": "Extract visual DNA from image(s) as structured JSON (style, scene, subject, camera, lighting, materials, colors)" },
     { "name": "describe_image", "description": "Generate a detailed text description of image(s)" },
     { "name": "list_templates", "description": "List available pre-built Visual DNA style templates" },

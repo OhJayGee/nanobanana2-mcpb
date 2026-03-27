@@ -20986,7 +20986,7 @@ var StdioServerTransport = class {
 };
 
 // server/index.js
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -21030,7 +21030,10 @@ function loadEstimates() {
       if (allValid) estimateTable = raw.table;
     }
     if (raw.samples && typeof raw.samples === "object" && !Array.isArray(raw.samples)) {
-      sampleCounts = raw.samples;
+      const samplesValid = validSizes.every(
+        (s) => !raw.samples[s] || typeof raw.samples[s] === "object" && !Array.isArray(raw.samples[s]) && validLevels.every((l) => raw.samples[s][l] === void 0 || typeof raw.samples[s][l] === "number")
+      );
+      if (samplesValid) sampleCounts = raw.samples;
     }
   } catch {
   }
@@ -21039,7 +21042,9 @@ function saveEstimates() {
   try {
     mkdirSync(getOutputDir(), { recursive: true });
     writeFileSync(getEstimatesFile(), JSON.stringify({ table: estimateTable, samples: sampleCounts }, null, 2));
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[nanobanana] Warning: failed to save estimates: ${err.message}
+`);
   }
 }
 function recordActualTime(image_size, thinking_level, actualSeconds) {
@@ -21061,6 +21066,8 @@ function getSampleCount(image_size, thinking_level) {
 loadEstimates();
 var jobs = /* @__PURE__ */ new Map();
 var JOB_TTL_MS = 30 * 60 * 1e3;
+var MAX_CONCURRENT_JOBS = 5;
+var MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 function pruneJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, job] of jobs) {
@@ -21095,6 +21102,13 @@ function getJob(jobId) {
 function getAllJobs() {
   return Object.fromEntries(jobs);
 }
+function activeJobCount() {
+  let count = 0;
+  for (const job of jobs.values()) {
+    if (job.status === "processing") count++;
+  }
+  return count;
+}
 function slugify(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
 }
@@ -21121,7 +21135,25 @@ function assertPathAllowed(p) {
   const abs = resolve(p);
   const ext = abs.toLowerCase().split(".").pop();
   if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
-    throw new Error(`Access denied: only image files are allowed (jpg, png, webp, etc.). Got: ${p}`);
+    throw new Error(`Access denied: only image files are allowed (jpg, png, webp, etc.). Got: ${abs}`);
+  }
+}
+function validateImageBuffer(buffer, imgPath) {
+  if (buffer.length < 4) {
+    throw new Error(`File too small to be a valid image: ${imgPath}`);
+  }
+  const isPNG = buffer[0] === 137 && buffer[1] === 80 && buffer[2] === 78 && buffer[3] === 71;
+  const isJPEG = buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255;
+  const isWebP = buffer.length >= 12 && buffer[0] === 82 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 70 && buffer[8] === 87 && buffer[9] === 69 && buffer[10] === 66 && buffer[11] === 80;
+  const isGIF = buffer[0] === 71 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 56;
+  const isBMP = buffer[0] === 66 && buffer[1] === 77;
+  const isTIFF = buffer[0] === 73 && buffer[1] === 73 && buffer[2] === 42 && buffer[3] === 0 || buffer[0] === 77 && buffer[1] === 77 && buffer[2] === 0 && buffer[3] === 42;
+  const HEIF_BRANDS = /* @__PURE__ */ new Set(["heic", "heix", "hevc", "mif1", "msf1", "avif", "avis"]);
+  const isFtyp = buffer.length >= 12 && buffer[4] === 102 && buffer[5] === 116 && buffer[6] === 121 && buffer[7] === 112;
+  const brand = isFtyp ? String.fromCharCode(buffer[8], buffer[9], buffer[10], buffer[11]) : "";
+  const isHEIF = isFtyp && HEIF_BRANDS.has(brand);
+  if (!isPNG && !isJPEG && !isWebP && !isGIF && !isBMP && !isTIFF && !isHEIF) {
+    throw new Error(`Access denied: file does not contain valid image data: ${imgPath}`);
   }
 }
 async function loadImageParts(imagePaths) {
@@ -21134,10 +21166,20 @@ async function loadImageParts(imagePaths) {
   return Promise.all(
     imagePaths.map(async (imgPath) => {
       assertPathAllowed(imgPath);
-      if (!existsSync(imgPath)) {
-        throw new Error(`Image file not found: ${imgPath}`);
+      let realPath;
+      try {
+        realPath = realpathSync(imgPath);
+      } catch (err) {
+        if (err.code === "ENOENT") throw new Error(`Image file not found: ${imgPath}`);
+        throw err;
       }
-      const buffer = await readFile(imgPath);
+      assertPathAllowed(realPath);
+      const stat = statSync(realPath);
+      if (stat.size > MAX_IMAGE_BYTES) {
+        throw new Error(`Image file too large: ${imgPath} (${(stat.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)`);
+      }
+      const buffer = await readFile(realPath);
+      validateImageBuffer(buffer, imgPath);
       return {
         inlineData: {
           mimeType: detectMimeType(imgPath),
@@ -21173,12 +21215,18 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
     body: JSON.stringify(body)
   });
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+    let message = `Gemini API error (${response.status})`;
+    try {
+      const errorBody = await response.json();
+      if (errorBody?.error?.message) message += `: ${errorBody.error.message}`;
+    } catch {
+    }
+    throw new Error(message);
   }
   const data = await response.json();
   if (data.error) {
-    throw new Error(`Gemini API error: ${data.error.message}`);
+    const msg = typeof data.error.message === "string" ? data.error.message : "unknown error";
+    throw new Error(`Gemini API error: ${msg}`);
   }
   const candidates = data.candidates;
   if (!candidates || candidates.length === 0) {
@@ -21242,6 +21290,16 @@ if (!process.env.NANOBANANA_TEST) {
     },
     async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
+        if (activeJobCount() >= MAX_CONCURRENT_JOBS) {
+          throw new Error(`Too many concurrent jobs (${MAX_CONCURRENT_JOBS} max). Wait for existing jobs to finish.`);
+        }
+        if (visual_dna) {
+          const entries = Object.entries(visual_dna);
+          if (entries.length > 20) throw new Error("visual_dna: too many keys (max 20)");
+          for (const [, v] of entries) {
+            if (v.length > 500) throw new Error("visual_dna: value too long (max 500 characters)");
+          }
+        }
         ensureOutputDir();
         const filename = generateFilename(prompt);
         const filePath = join(getOutputDir(), filename);
@@ -21263,7 +21321,10 @@ if (!process.env.NANOBANANA_TEST) {
         }).catch((err) => {
           failJob(jobId, err.message);
         });
-        await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
+        try {
+          await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
+        } catch {
+        }
         return {
           content: [{
             type: "text",
@@ -21297,15 +21358,24 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
     },
     async ({ images, prompt, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
-        const imageParts = await loadImageParts(images);
+        if (activeJobCount() >= MAX_CONCURRENT_JOBS) {
+          throw new Error(`Too many concurrent jobs (${MAX_CONCURRENT_JOBS} max). Wait for existing jobs to finish.`);
+        }
         ensureOutputDir();
         const filename = generateFilename(prompt);
         const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
-        const jsonPrompt = { content: prompt, aspect_ratio, image_size };
-        const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
         const estimated = estimateSeconds(image_size, thinking_level);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
+        let imageParts;
+        try {
+          imageParts = await loadImageParts(images);
+        } catch (err) {
+          failJob(jobId, err.message);
+          throw err;
+        }
+        const jsonPrompt = { content: prompt, aspect_ratio, image_size };
+        const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21317,7 +21387,10 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         }).catch((err) => {
           failJob(jobId, err.message);
         });
-        await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
+        try {
+          await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
+        } catch {
+        }
         return {
           content: [{
             type: "text",
@@ -21434,7 +21507,10 @@ Prompt: ${job.prompt}`
         const imageParts = await loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
-        await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
+        try {
+          await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
+        } catch {
+        }
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
@@ -21461,7 +21537,10 @@ Prompt: ${job.prompt}`
       try {
         const imageParts = await loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
-        await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);
+        try {
+          await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);
+        } catch {
+        }
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
@@ -21533,12 +21612,12 @@ ${summaries.join("\n")}`
   await server.connect(transport);
 }
 export {
+  activeJobCount,
   assertPathAllowed,
   callGeminiAPI,
   completeJob,
   createJob,
   detectMimeType,
-  ensureOutputDir,
   estimateSeconds,
   failJob,
   generateFilename,
@@ -21555,5 +21634,6 @@ export {
   recordActualTime,
   resolveHome,
   saveEstimates,
-  slugify
+  slugify,
+  validateImageBuffer
 };
