@@ -20994,26 +20994,72 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-var OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
-var ESTIMATE_TABLE = {
-  //              minimal  high
+var OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || process.env.USERPROFILE || "", "Desktop", "nanobanana-output");
+var EMA_ALPHA = 0.25;
+var MARGIN_FACTOR = 1.5;
+var ESTIMATE_PRIORS = {
   "0.5K": { minimal: 20, high: 30 },
   "1K": { minimal: 30, high: 45 },
   "2K": { minimal: 50, high: 75 },
   "4K": { minimal: 90, high: 135 }
 };
-function estimateSeconds(image_size, thinking_level) {
-  return ESTIMATE_TABLE[image_size]?.[thinking_level] ?? 45;
+var estimateTable = JSON.parse(JSON.stringify(ESTIMATE_PRIORS));
+var sampleCounts = { "0.5K": {}, "1K": {}, "2K": {}, "4K": {} };
+function getEstimatesFile() {
+  return join(OUTPUT_DIR, ".nanobanana-estimates.json");
 }
+function loadEstimates() {
+  try {
+    const raw = JSON.parse(readFileSync(getEstimatesFile(), "utf8"));
+    if (raw.table) estimateTable = raw.table;
+    if (raw.samples) sampleCounts = raw.samples;
+  } catch {
+  }
+}
+function saveEstimates() {
+  try {
+    mkdirSync(OUTPUT_DIR, { recursive: true });
+    writeFileSync(getEstimatesFile(), JSON.stringify({ table: estimateTable, samples: sampleCounts }, null, 2));
+  } catch {
+  }
+}
+function recordActualTime(image_size, thinking_level, actualSeconds) {
+  if (!estimateTable[image_size]) return;
+  const current = estimateTable[image_size][thinking_level];
+  if (current === void 0) return;
+  const observed = actualSeconds * MARGIN_FACTOR;
+  estimateTable[image_size][thinking_level] = Math.round(EMA_ALPHA * observed + (1 - EMA_ALPHA) * current);
+  if (!sampleCounts[image_size]) sampleCounts[image_size] = {};
+  sampleCounts[image_size][thinking_level] = (sampleCounts[image_size][thinking_level] || 0) + 1;
+  saveEstimates();
+}
+function estimateSeconds(image_size, thinking_level) {
+  return estimateTable[image_size]?.[thinking_level] ?? 45;
+}
+function getSampleCount(image_size, thinking_level) {
+  return sampleCounts[image_size]?.[thinking_level] || 0;
+}
+loadEstimates();
 var jobs = /* @__PURE__ */ new Map();
-function createJob(jobId, filePath, prompt, estimatedSeconds) {
-  jobs.set(jobId, { status: "processing", filePath, prompt, error: null, startedAt: Date.now(), estimatedSeconds, completedAt: null });
+var JOB_TTL_MS = 30 * 60 * 1e3;
+function pruneJobs() {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, job] of jobs) {
+    if (job.status !== "processing" && job.completedAt < cutoff) {
+      jobs.delete(id);
+    }
+  }
+}
+function createJob(jobId, filePath, prompt, estimatedSeconds, image_size, thinking_level) {
+  jobs.set(jobId, { status: "processing", filePath, prompt, image_size, thinking_level, error: null, startedAt: Date.now(), estimatedSeconds, completedAt: null });
 }
 function completeJob(jobId) {
   const job = jobs.get(jobId);
   if (job) {
     job.status = "complete";
     job.completedAt = Date.now();
+    const actualSeconds = (job.completedAt - job.startedAt) / 1e3;
+    recordActualTime(job.image_size, job.thinking_level, actualSeconds);
   }
 }
 function failJob(jobId, error2) {
@@ -21047,6 +21093,9 @@ function generateFilename(prompt) {
 }
 function getTemplateDir() {
   return join(__dirname, "..", "assets", "templates");
+}
+function isValidTemplateName(name) {
+  return !name.includes("/") && !name.includes("\\") && !name.includes("..");
 }
 function loadImageParts(imagePaths) {
   if (!imagePaths || imagePaths.length === 0) {
@@ -21103,17 +21152,36 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
   }
   const candidates = data.candidates;
   if (!candidates || candidates.length === 0) {
+    const blocked = data.promptFeedback?.blockReason;
+    if (blocked) {
+      throw new Error(`Prompt blocked by Gemini (${blocked}). Try rephrasing or adjusting the content.`);
+    }
     throw new Error("Gemini API returned no candidates");
   }
   const candidate = candidates[0];
+  const finishReason = candidate.finishReason;
+  if (finishReason && finishReason !== "STOP" && finishReason !== "FINISH_REASON_UNSPECIFIED") {
+    if (finishReason === "SAFETY") {
+      const triggered = (candidate.safetyRatings || []).filter((r) => r.blocked || r.probability === "HIGH" || r.probability === "MEDIUM").map((r) => r.category.replace("HARM_CATEGORY_", "").toLowerCase().replace(/_/g, " ")).join(", ");
+      const detail = triggered ? ` (${triggered})` : "";
+      throw new Error(`Image blocked by Gemini safety filters${detail}. Try a different prompt.`);
+    }
+    if (finishReason === "RECITATION") {
+      throw new Error("Image blocked by Gemini due to potential copyright/recitation policy. Try a more original prompt.");
+    }
+    if (finishReason === "MAX_TOKENS") {
+      throw new Error("Gemini hit its token limit mid-generation. Try a simpler prompt or lower thinking level.");
+    }
+    throw new Error(`Gemini generation stopped unexpectedly (finishReason: ${finishReason}).`);
+  }
   if (modalities.includes("IMAGE")) {
-    const imagePart = candidate.content.parts.find((p) => p.inlineData);
+    const imagePart = candidate.content?.parts?.find((p) => p.inlineData);
     if (!imagePart) {
       throw new Error("No image data in Gemini API response");
     }
     return { type: "image", data: Buffer.from(imagePart.inlineData.data, "base64") };
   }
-  const textPart = candidate.content.parts.find((p) => p.text);
+  const textPart = candidate.content?.parts?.find((p) => p.text);
   if (!textPart) {
     throw new Error("No text data in Gemini API response");
   }
@@ -21153,7 +21221,7 @@ if (!process.env.NANOBANANA_TEST) {
         if (visual_dna) jsonPrompt.visual_dna = visual_dna;
         const parts = [{ text: JSON.stringify(jsonPrompt) }];
         const estimated = estimateSeconds(image_size, thinking_level);
-        createJob(jobId, filePath, prompt, estimated);
+        createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21207,7 +21275,7 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
         const estimated = estimateSeconds(image_size, thinking_level);
-        createJob(jobId, filePath, prompt, estimated);
+        createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21249,6 +21317,7 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
       }
     },
     async ({ job_id }) => {
+      pruneJobs();
       if (!job_id) {
         const allJobs = getAllJobs();
         const entries = Object.entries(allJobs);
@@ -21281,12 +21350,15 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
           const stats = statSync(job.filePath);
           fileInfo += ` (${(stats.size / 1024).toFixed(0)} KB)`;
         }
+        const n = getSampleCount(job.image_size, job.thinking_level);
+        const learnedNote = n > 0 ? `
+Next estimate for ${job.image_size}/${job.thinking_level}: ~${estimateSeconds(job.image_size, job.thinking_level)}s (based on ${n} observation${n === 1 ? "" : "s"})` : "";
         return {
           content: [{
             type: "text",
             text: `Status: complete
 Actual time: ${elapsed}s${estNote}
-${fileInfo}
+${fileInfo}${learnedNote}
 Prompt: ${job.prompt}`
           }]
         };
@@ -21413,7 +21485,7 @@ ${summaries.join("\n")}`
     },
     async ({ name }) => {
       try {
-        if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+        if (!isValidTemplateName(name)) {
           throw new Error("Invalid template name");
         }
         const templatePath = join(getTemplateDir(), `${name}.json`);
@@ -21440,8 +21512,15 @@ export {
   failJob,
   generateFilename,
   getAllJobs,
+  getEstimatesFile,
   getJob,
+  getSampleCount,
   getTemplateDir,
+  isValidTemplateName,
+  loadEstimates,
   loadImageParts,
+  pruneJobs,
+  recordActualTime,
+  saveEstimates,
   slugify
 };

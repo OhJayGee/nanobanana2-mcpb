@@ -18,7 +18,7 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models
 // No server-side timeout — let the MCP client (Claude Desktop) manage timeouts.
 // Our log notifications keep the client informed that work is in progress.
 
-const OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || "", "Desktop", "nanobanana-output");
+const OUTPUT_DIR = process.env.OUTPUT_DIR || join(process.env.HOME || process.env.USERPROFILE || "", "Desktop", "nanobanana-output");
 
 // ---------------------------------------------------------------------------
 // Generation time heuristic
