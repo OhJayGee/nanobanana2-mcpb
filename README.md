@@ -13,7 +13,7 @@
   <a href="https://github.com/OhJayGee/nanobanana2-mcpb/releases/latest"><img src="https://img.shields.io/github/v/release/OhJayGee/nanobanana2-mcpb?style=flat-square&color=blue" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"></a>
   <a href="https://github.com/OhJayGee/nanobanana2-mcpb/releases/latest"><img src="https://img.shields.io/github/downloads/OhJayGee/nanobanana2-mcpb/total?style=flat-square&color=orange" alt="Downloads"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen?style=flat-square" alt="Node">
 </p>
 
@@ -33,12 +33,17 @@ Built with the [MCPB](https://github.com/anthropics/mcpb) (MCP Bundles) format.
 
 That's it. No Node.js install needed — Claude Desktop bundles everything.
 
+## Updating
+
+Download the latest `.mcpb` from the [releases page](https://github.com/OhJayGee/nanobanana2-mcpb/releases/latest) and install it the same way. Claude Desktop updates the extension in-place — no uninstall needed.
+
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `generate_image` | Text-to-image with optional style, Visual DNA, aspect ratio, resolution |
-| `edit_image` | Surgical editing of existing images while preserving unmentioned elements |
+| `generate_image` | Queue text-to-image generation — returns immediately with a `job_id` |
+| `edit_image` | Queue image editing — returns immediately with a `job_id` |
+| `check_generation` | Poll a queued job for status, elapsed time, and output file details |
 | `extract_visual_dna` | Reverse-engineer an image's aesthetics into structured JSON |
 | `describe_image` | Generate a detailed text description of any image |
 | `list_templates` | Browse 8 built-in Visual DNA style templates |
@@ -50,13 +55,20 @@ That's it. No Node.js install needed — Claude Desktop bundles everything.
 
 > "Create a hero image for our headphones product page"
 
-```json
-{
-  "prompt": "Premium wireless headphones floating on a dark gradient, dramatic product lighting",
-  "aspect_ratio": "16:9",
-  "image_size": "2K",
-  "thinking_level": "high"
-}
+Generation runs asynchronously — `generate_image` returns immediately with a `job_id`, then Claude polls `check_generation` until the file is ready (typically 10–90 seconds depending on resolution and thinking level).
+
+```
+1. generate_image({
+     "prompt": "Premium wireless headphones floating on a dark gradient, dramatic product lighting",
+     "aspect_ratio": "16:9",
+     "image_size": "2K",
+     "thinking_level": "high"
+   })
+   → job_id: a1b2c3, output_path: ~/Desktop/nanobanana-output/2026-03-27-premium-headphones-a1b2c3.png
+     Estimated time: ~75s
+
+2. check_generation({ "job_id": "a1b2c3" })
+   → Status: complete | Actual: 61s | File: ...premium-headphones-a1b2c3.png (1.8 MB)
 ```
 
 ### Style consistency with Visual DNA
@@ -101,16 +113,18 @@ Extract the aesthetic DNA from a reference image, then apply it to new subjects:
 
 ### Autonomous workflows (Claude Cowork)
 
-Claude chains tools automatically:
+Claude chains tools automatically. Both `generate_image` calls are queued immediately, then Claude polls both jobs until complete before drafting the email:
 
 ```
 User: "Create a product launch email with custom images"
 
 Claude:
-  1. generate_image → hero banner (16:9, 2K)
-  2. generate_image → lifestyle product shot (4:3)
-  3. describe_image → alt text for accessibility
-  4. gmail_create_draft → compose email with images attached
+  1. generate_image → hero banner (16:9, 2K)      → job_id: abc
+  2. generate_image → lifestyle product shot (4:3) → job_id: def
+  3. check_generation(abc) → complete (61s)
+  4. check_generation(def) → complete (38s)
+  5. describe_image → alt text for accessibility
+  6. gmail_create_draft → compose email with images attached
 ```
 
 See [EXAMPLES.md](EXAMPLES.md) for more detailed examples.
@@ -163,7 +177,8 @@ Set during installation via Claude Desktop's settings UI:
 git clone https://github.com/OhJayGee/nanobanana2-mcpb.git
 cd nanobanana2-mcpb
 npm install
-npm test          # Run 20 tests
+npm test          # Run 51 tests
+npm run scan      # Semgrep security scan
 npm run build     # Bundle with esbuild
 npm run pack      # Build + pack .mcpb
 ```
