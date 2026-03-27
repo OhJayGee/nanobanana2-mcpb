@@ -28,14 +28,15 @@ Built with the [MCPB](https://github.com/anthropics/mcpb) (MCP Bundles) format.
 ## Install
 
 1. **Download** [`nanobananaMCPB.mcpb`](https://github.com/OhJayGee/nanobanana2-mcpb/releases/latest) from the latest release
-2. **Double-click** the file (or drag it onto Claude Desktop)
-3. **Configure** your [Google AI Studio API key](https://aistudio.google.com/apikey) and output directory when prompted
+2. Open Claude Desktop → **Settings → Extensions → Advanced settings → Install Extension**
+3. Select the downloaded `.mcpb` file and confirm
+4. **Configure** your [Google AI Studio API key](https://aistudio.google.com/apikey) and output directory when prompted
 
-That's it. No Node.js install needed — Claude Desktop bundles everything.
+No Node.js install needed — Claude Desktop bundles everything.
 
 ## Updating
 
-Download the latest `.mcpb` from the [releases page](https://github.com/OhJayGee/nanobanana2-mcpb/releases/latest) and install it the same way. Claude Desktop updates the extension in-place — no uninstall needed.
+Download the latest `.mcpb` from the [releases page](https://github.com/OhJayGee/nanobanana2-mcpb/releases/latest) and follow the same install path: **Settings → Extensions → Advanced settings → Install Extension**. Claude Desktop updates the extension in-place — no uninstall needed.
 
 ## Tools
 
