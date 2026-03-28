@@ -178,11 +178,20 @@ Set during installation via Claude Desktop's settings UI:
 git clone https://github.com/OhJayGee/nanobanana2-mcpb.git
 cd nanobanana2-mcpb
 npm install
-npm test          # Run 51 tests
-npm run scan      # Semgrep security scan
+npm test          # Run 109 unit + e2e tests
+npm run scan      # Semgrep security scan (203 rules)
 npm run build     # Bundle with esbuild
 npm run pack      # Build + pack .mcpb
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, data flow diagrams, async job queue, security model, EMA heuristic |
+| [TESTING.md](TESTING.md) | Test structure (unit, e2e, integration, live), coverage details, security test matrix |
+| [EXAMPLES.md](EXAMPLES.md) | Detailed usage examples and workflow patterns |
+| [PRIVACY.md](PRIVACY.md) | Privacy policy — what data is sent to Google's Gemini API |
 
 ## Privacy
 
