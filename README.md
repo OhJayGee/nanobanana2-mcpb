@@ -179,7 +179,7 @@ Set during installation via Claude Desktop's settings UI:
 git clone https://github.com/OhJayGee/nanobanana2-mcpb.git
 cd nanobanana2-mcpb
 npm install
-npm test          # Run 109 unit + e2e tests
+npm test          # Run 120 tests
 npm run scan      # Semgrep security scan (203 rules)
 npm run build     # Bundle with esbuild
 npm run pack      # Build + pack .mcpb

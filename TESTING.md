@@ -3,7 +3,7 @@
 ## Running Tests
 
 ```bash
-npm test                    # Unit, e2e, and integration tests (109 tests, mocked API)
+npm test                    # Unit, e2e, and integration tests (120 tests, mocked API)
 npm run scan                # Semgrep security scan (203 rules)
 
 # Live integration tests (real Gemini API, requires API key)
@@ -14,7 +14,7 @@ Uses Node.js native `node:test` runner. No test framework dependencies.
 
 The `NANOBANANA_TEST=1` env var prevents the MCP server from auto-starting via stdio during test imports.
 
-**Current state:** 109 tests, 21 suites, 0 failures. 10 additional live tests (skipped unless `NANOBANANA_LIVE_TEST=1`).
+**Current state:** 120 tests, 22 suites, 0 failures. 10 additional live tests (skipped unless `NANOBANANA_LIVE_TEST=1`).
 
 ---
 
@@ -22,8 +22,8 @@ The `NANOBANANA_TEST=1` env var prevents the MCP server from auto-starting via s
 
 ```
 test/
-├── server.test.js       # Unit tests — helpers, security, job queue, API client (87 tests)
-├── e2e.test.js           # End-to-end MCP tests via InMemoryTransport (17 tests)
+├── server.test.js       # Unit tests — helpers, security, job queue, API client (97 tests)
+├── e2e.test.js           # End-to-end MCP tests via InMemoryTransport (18 tests)
 ├── integration.test.js   # File-level integration — templates, loadImageParts (5 tests)
 └── live.test.js          # Live Gemini API tests — real generation (10 tests, opt-in)
 ```
@@ -66,7 +66,7 @@ This exercises the full stack: JSON-RPC serialization, Zod schema validation, to
 |------|-------|
 | Tool listing | Verifies all 7 tools registered |
 | `generate_image` | Full queue → poll → complete flow; API failure recorded on job; `visual_dna` key count and value length limits |
-| `edit_image` | Valid image input; non-image path rejected; fake-image-content rejected (magic bytes) |
+| `edit_image` | Valid image input; non-image path rejected; fake-image-content rejected (magic bytes); EXIF stripped from JPEG before API upload |
 | `check_generation` | Unknown job_id; list-all-jobs |
 | `extract_visual_dna` | Structured JSON response from mocked API |
 | `describe_image` | Text response from mocked API |
@@ -199,7 +199,21 @@ Magic-bytes validation for 7 image formats:
 
 Also tests: rejection of non-image content, rejection of buffers too small (< 4 bytes), and rejection of `ftyp` with non-image brand (e.g. `isom` MP4).
 
-### `loadImageParts` — 8 tests
+### `stripJpegMetadata` — 7 tests
+
+Pure JS JPEG segment parser that removes privacy-sensitive metadata before API upload.
+
+| Test | What it verifies |
+|------|-----------------|
+| Strips APP1 (EXIF) | GPS coordinates and device info removed from output |
+| Strips APP13 + COM | IPTC creator data and software comments removed |
+| Preserves image data | SOS marker and compressed data intact, EOI at end |
+| Smaller output | Stripped buffer is smaller than original |
+| Non-JPEG passthrough | PNG buffer returned by reference (no copy) |
+| No-metadata JPEG | JPEG without APP1 handled without error |
+| Edge cases | Empty buffer, 1-byte buffer, SOI-only buffer — no crash |
+
+### `loadImageParts` — 9 tests
 
 End-to-end image loading pipeline:
 
@@ -211,10 +225,11 @@ End-to-end image loading pipeline:
 | Fake image content | File named `.png` but containing text → magic bytes check rejects |
 | Nonexistent file | `realpathSync` throws ENOENT → clean error message |
 | Symlink to non-image | Symlink `foo.png → /etc/hosts` → real path extension check rejects |
+| Non-regular file | Directory with `.png` name → rejected with "not a regular file" |
 | Empty array | Throws "at least one image path" |
 | Too many images | > 14 images throws |
 
-### `loadEstimates / saveEstimates` — 7 tests
+### `loadEstimates / saveEstimates` — 9 tests
 
 Persistence layer for EMA timing data. Uses temp directories.
 
@@ -227,6 +242,8 @@ Persistence layer for EMA timing data. Uses temp directories.
 | Non-number table values | `"fast"` instead of number → table not loaded |
 | Non-number sample counts | `"lots"` instead of number → samples not loaded |
 | Array-typed samples | `samples: [1,2,3]` → samples not loaded |
+| NaN table values | `NaN` passes `typeof === "number"` but fails `isFinite` check → rejected |
+| Infinity table values | `Infinity` fails `isFinite` check → rejected |
 
 ### `integration: template files exist` — 2 tests
 
