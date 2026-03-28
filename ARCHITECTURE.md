@@ -56,7 +56,7 @@ nanobananaMCPB/
 ├── assets/
 │   └── templates/             # 8 Visual DNA style presets (.json)
 ├── test/
-│   ├── server.test.js         # Unit tests (92 tests)
+│   ├── server.test.js         # Unit tests (87 tests)
 │   ├── e2e.test.js            # MCP end-to-end via InMemoryTransport (17 tests)
 │   ├── integration.test.js    # File-level integration (5 tests)
 │   └── live.test.js           # Real Gemini API tests (10 tests, opt-in)
@@ -64,6 +64,8 @@ nanobananaMCPB/
 │   └── index.js               # esbuild bundle (production entry point)
 ├── ARCHITECTURE.md
 ├── TESTING.md
+├── EXAMPLES.md
+├── PRIVACY.md
 └── README.md
 ```
 
@@ -221,7 +223,7 @@ Every image path passes through four checks before any bytes are read or sent:
 
 ```mermaid
 flowchart TD
-    A[user-supplied path] --> B{extension allowlist<br/>jpg/png/webp/gif/bmp/tiff/heic/avif}
+    A[user-supplied path] --> B{extension allowlist<br/>jpg/jpeg/png/webp/gif/bmp/tiff/tif/heic/heif/avif}
     B -->|rejected| X1[Access denied]
     B -->|passed| C[realpathSync<br/>resolve symlinks]
     C -->|ENOENT| X2[File not found]

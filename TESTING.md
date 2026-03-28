@@ -3,7 +3,7 @@
 ## Running Tests
 
 ```bash
-npm test                    # Unit + e2e tests (110 tests, mocked API)
+npm test                    # Unit, e2e, and integration tests (109 tests, mocked API)
 npm run scan                # Semgrep security scan (203 rules)
 
 # Live integration tests (real Gemini API, requires API key)
@@ -22,7 +22,7 @@ The `NANOBANANA_TEST=1` env var prevents the MCP server from auto-starting via s
 
 ```
 test/
-├── server.test.js       # Unit tests — helpers, security, job queue, API client (92 tests)
+├── server.test.js       # Unit tests — helpers, security, job queue, API client (87 tests)
 ├── e2e.test.js           # End-to-end MCP tests via InMemoryTransport (17 tests)
 ├── integration.test.js   # File-level integration — templates, loadImageParts (5 tests)
 └── live.test.js          # Live Gemini API tests — real generation (10 tests, opt-in)
@@ -132,9 +132,9 @@ Extension-based MIME detection. Case-insensitive. Defaults to `image/jpeg` for u
 
 Produces `YYYY-MM-DD-slug-hex.png` format, verified by regex.
 
-### `estimateSeconds` — 3 tests
+### `estimateSeconds` — 2 tests
 
-EMA-based generation time estimates. Tests valid lookups, relative ordering (larger sizes > smaller), and fallback for unknown parameters.
+EMA-based generation time estimates. Tests valid positive results for all size/level combinations, and fallback for unknown parameters.
 
 ### `job queue` — 6 tests
 

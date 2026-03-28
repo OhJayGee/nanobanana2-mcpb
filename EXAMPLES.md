@@ -131,7 +131,9 @@ Available templates:
 
 Claude Cowork chains tools automatically:
 
-1. `generate_image` → hero banner (16:9, 2K)
-2. `generate_image` → lifestyle product shot (4:3)
-3. `describe_image` → alt text for accessibility
-4. `gmail_create_draft` → compose email with images attached
+1. `generate_image` → hero banner (16:9, 2K) → job_id: abc
+2. `generate_image` → lifestyle product shot (4:3) → job_id: def
+3. `check_generation(abc)` → complete (61s)
+4. `check_generation(def)` → complete (38s)
+5. `describe_image` → alt text for accessibility
+6. `gmail_create_draft` → compose email with images attached
