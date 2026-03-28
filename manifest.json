@@ -22,7 +22,8 @@
         "GEMINI_API_KEY": "${user_config.gemini_api_key}",
         "OUTPUT_DIR": "${user_config.output_directory}",
         "GEMINI_MODEL": "${user_config.gemini_model}",
-        "STRIP_METADATA": "${user_config.strip_metadata}"
+        "STRIP_METADATA": "${user_config.strip_metadata}",
+        "NANOBANANA_DEBUG": "${user_config.debug_logging}"
       }
     }
   },
@@ -46,6 +47,12 @@
       "title": "Gemini Model",
       "description": "Gemini model ID for image generation. Change when Google promotes the model from preview to GA.",
       "default": "gemini-3.1-flash-image-preview"
+    },
+    "debug_logging": {
+      "type": "boolean",
+      "title": "Debug Logging",
+      "description": "Write timestamped API call lifecycle to a .nanobanana-debug.log file in the output directory. Use 'tail -f' on the log file to monitor in real time.",
+      "default": false
     },
     "strip_metadata": {
       "type": "boolean",

@@ -20986,7 +20986,7 @@ var StdioServerTransport = class {
 };
 
 // server/index.js
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -21000,12 +21000,19 @@ if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 var API_TIMEOUT_MS = 5 * 60 * 1e3;
-var DEBUG = process.env.NANOBANANA_DEBUG === "1";
+var DEBUG = process.env.NANOBANANA_DEBUG === "1" || process.env.NANOBANANA_DEBUG === "true";
 function debug(jobId, ...args) {
   if (!DEBUG) return;
-  const ts = (/* @__PURE__ */ new Date()).toISOString().slice(11, 23);
-  process.stderr.write(`[nanobanana ${ts}] [${jobId}] ${args.join(" ")}
-`);
+  const ts = (/* @__PURE__ */ new Date()).toISOString().slice(0, 23);
+  const line = `${ts} [${jobId}] ${args.join(" ")}
+`;
+  try {
+    const logPath = join(getOutputDir(), ".nanobanana-debug.log");
+    mkdirSync(getOutputDir(), { recursive: true });
+    appendFileSync(logPath, line);
+  } catch {
+    process.stderr.write(`[nanobanana] ${line}`);
+  }
 }
 var HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
 if (!HOME_DIR) {

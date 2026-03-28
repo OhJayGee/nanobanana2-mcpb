@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -25,13 +25,21 @@ const STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 // Background API calls (fire-and-forget) use their own timeout via AbortController.
 // Without this, a hung Gemini connection would leave a job stuck in "processing" forever.
 const API_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max per API call
-// Debug logging: set NANOBANANA_DEBUG=1 to see timestamped API call lifecycle on stderr.
-// Not exposed in MCPB config — for local development only.
-const DEBUG = process.env.NANOBANANA_DEBUG === "1";
+// Debug logging: set NANOBANANA_DEBUG=1 to write timestamped API call lifecycle
+// to OUTPUT_DIR/.nanobanana-debug.log. View with: tail -f ~/Desktop/nanobanana-output/.nanobanana-debug.log
+const DEBUG = process.env.NANOBANANA_DEBUG === "1" || process.env.NANOBANANA_DEBUG === "true";
 function debug(jobId, ...args) {
   if (!DEBUG) return;
-  const ts = new Date().toISOString().slice(11, 23);
-  process.stderr.write(`[nanobanana ${ts}] [${jobId}] ${args.join(" ")}\n`);
+  const ts = new Date().toISOString().slice(0, 23);
+  const line = `${ts} [${jobId}] ${args.join(" ")}\n`;
+  try {
+    const logPath = join(getOutputDir(), ".nanobanana-debug.log");
+    mkdirSync(getOutputDir(), { recursive: true });
+    appendFileSync(logPath, line);
+  } catch {
+    // Fall back to stderr if output dir is not writable
+    process.stderr.write(`[nanobanana] ${line}`);
+  }
 }
 
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
