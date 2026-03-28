@@ -20999,6 +20999,7 @@ if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
 }
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var STRIP_METADATA = process.env.STRIP_METADATA !== "false";
+var API_TIMEOUT_MS = 5 * 60 * 1e3;
 var HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
 if (!HOME_DIR) {
   throw new Error("Cannot determine home directory: HOME and USERPROFILE are both unset.");
@@ -21239,7 +21240,7 @@ async function loadImageParts(imagePaths) {
 function ensureOutputDir() {
   mkdirSync(getOutputDir(), { recursive: true });
 }
-async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts }) {
+async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts, signal }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY environment variable is not set. Configure it in the extension settings.");
@@ -21259,7 +21260,8 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    ...signal ? { signal } : {}
   });
   if (!response.ok) {
     let message = `Gemini API error (${response.status})`;
@@ -21362,16 +21364,22 @@ function createServer() {
         const parts = [{ text: JSON.stringify(jsonPrompt) }];
         const estimated = estimateSeconds(image_size, thinking_level);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
           thinkingLevel: thinking_level,
-          includeThoughts: true
+          includeThoughts: true,
+          signal: controller.signal
         }).then((result) => {
+          clearTimeout(timeout);
           writeFileSync(filePath, result.data);
           completeJob(jobId);
         }).catch((err) => {
-          failJob(jobId, err.message);
+          clearTimeout(timeout);
+          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          failJob(jobId, msg);
         });
         try {
           await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
@@ -21432,16 +21440,22 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         }
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
           thinkingLevel: thinking_level,
-          includeThoughts: true
+          includeThoughts: true,
+          signal: controller.signal
         }).then((result) => {
+          clearTimeout(timeout);
           writeFileSync(filePath, result.data);
           completeJob(jobId);
         }).catch((err) => {
-          failJob(jobId, err.message);
+          clearTimeout(timeout);
+          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          failJob(jobId, msg);
         });
         try {
           await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);

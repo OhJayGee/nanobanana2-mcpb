@@ -160,6 +160,29 @@ describe("MCP server e2e", () => {
     }
   });
 
+  it("generate_image passes abort signal to fetch", async () => {
+    // Verify the fire-and-forget path includes an AbortSignal
+    let capturedSignal = null;
+    globalThis.fetch = async (url, opts) => {
+      capturedSignal = opts.signal;
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG_HEADER.toString("base64") } }] } }],
+        }),
+      };
+    };
+
+    const result = await client.callTool({
+      name: "generate_image",
+      arguments: { prompt: "signal test", image_size: "0.5K", thinking_level: "minimal" },
+    });
+    assert.ok(result.content[0].text.includes("job_id:"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(capturedSignal instanceof AbortSignal, "fetch should receive an AbortSignal");
+    assert.ok(!capturedSignal.aborted, "signal should not be aborted for a fast response");
+  });
+
   it("generate_image validates visual_dna size limits", async () => {
     const result = await client.callTool({
       name: "generate_image",

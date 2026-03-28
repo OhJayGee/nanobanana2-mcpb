@@ -22,8 +22,9 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models
 // Strip EXIF/IPTC metadata from JPEG images before sending to Gemini API.
 // Enabled by default; set STRIP_METADATA=false to disable.
 const STRIP_METADATA = process.env.STRIP_METADATA !== "false";
-// No server-side timeout — let the MCP client (Claude Desktop) manage timeouts.
-// Our log notifications keep the client informed that work is in progress.
+// Background API calls (fire-and-forget) use their own timeout via AbortController.
+// Without this, a hung Gemini connection would leave a job stuck in "processing" forever.
+const API_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max per API call
 
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
 if (!HOME_DIR) {
@@ -361,7 +362,7 @@ function ensureOutputDir() {
 // Gemini API Client (exported for testing)
 // ---------------------------------------------------------------------------
 
-export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts }) {
+export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts, signal }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY environment variable is not set. Configure it in the extension settings.");
@@ -385,6 +386,7 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
 
   if (!response.ok) {
@@ -513,17 +515,24 @@ export function createServer() {
         const estimated = estimateSeconds(image_size, thinking_level);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
 
-        // Fire-and-forget: run Gemini API in background
+        // Fire-and-forget with timeout: abort if Gemini doesn't respond within API_TIMEOUT_MS.
+        // Without this, a hung connection would leave the job stuck in "processing" forever.
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
           thinkingLevel: thinking_level,
           includeThoughts: true,
+          signal: controller.signal,
         }).then((result) => {
+          clearTimeout(timeout);
           writeFileSync(filePath, result.data);
           completeJob(jobId);
         }).catch((err) => {
-          failJob(jobId, err.message);
+          clearTimeout(timeout);
+          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          failJob(jobId, msg);
         });
 
         try { await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`); } catch { /* non-fatal */ }
@@ -585,17 +594,23 @@ export function createServer() {
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
 
-        // Fire-and-forget: run Gemini API in background
+        // Fire-and-forget with timeout: abort if Gemini doesn't respond within API_TIMEOUT_MS.
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
           thinkingLevel: thinking_level,
           includeThoughts: true,
+          signal: controller.signal,
         }).then((result) => {
+          clearTimeout(timeout);
           writeFileSync(filePath, result.data);
           completeJob(jobId);
         }).catch((err) => {
-          failJob(jobId, err.message);
+          clearTimeout(timeout);
+          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          failJob(jobId, msg);
         });
 
         try { await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`); } catch { /* non-fatal */ }

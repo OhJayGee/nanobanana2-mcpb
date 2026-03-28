@@ -252,6 +252,29 @@ describe("callGeminiAPI", () => {
     }
   });
 
+  it("respects AbortController signal", async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      // Simulate a slow response that gets aborted
+      return new Promise((_, reject) => {
+        opts.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      });
+    };
+    process.env.GEMINI_API_KEY = "test-key";
+
+    try {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 50);
+      await assert.rejects(
+        () => callGeminiAPI({ parts: [{ text: "test" }], modalities: ["TEXT"], thinkingLevel: "minimal", includeThoughts: false, signal: controller.signal }),
+        { name: "AbortError" }
+      );
+    } finally {
+      globalThis.fetch = origFetch;
+      delete process.env.GEMINI_API_KEY;
+    }
+  });
+
   it("treats FINISH_REASON_UNSPECIFIED as a successful finish", async () => {
     const origFetch = globalThis.fetch;
     globalThis.fetch = async () => ({
