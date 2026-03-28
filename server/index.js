@@ -27,7 +27,7 @@ const STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 const API_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max per API call
 // Debug logging: set NANOBANANA_DEBUG=1 to write timestamped API call lifecycle
 // to OUTPUT_DIR/.nanobanana-debug.log. View with: tail -f ~/Desktop/nanobanana-output/.nanobanana-debug.log
-const DEBUG = process.env.NANOBANANA_DEBUG === "1" || process.env.NANOBANANA_DEBUG === "true";
+const DEBUG = !!process.env.NANOBANANA_DEBUG && process.env.NANOBANANA_DEBUG !== "false";
 function debug(jobId, ...args) {
   if (!DEBUG) return;
   const ts = new Date().toISOString().slice(0, 23);
@@ -476,7 +476,7 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
 export function createServer() {
   const server = new McpServer({
     name: "nanobanana",
-    version: "1.4.1",
+    version: "1.4.2",
   });
 
   const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
@@ -878,6 +878,10 @@ export function createServer() {
 }
 
 if (!process.env.NANOBANANA_TEST) {
+  if (DEBUG) {
+    debug("init", `server starting — NANOBANANA_DEBUG=${process.env.NANOBANANA_DEBUG}, OUTPUT_DIR=${getOutputDir()}`);
+    debug("init", `log file: ${join(getOutputDir(), ".nanobanana-debug.log")}`);
+  }
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

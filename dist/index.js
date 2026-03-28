@@ -21000,7 +21000,7 @@ if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 var API_TIMEOUT_MS = 5 * 60 * 1e3;
-var DEBUG = process.env.NANOBANANA_DEBUG === "1" || process.env.NANOBANANA_DEBUG === "true";
+var DEBUG = !!process.env.NANOBANANA_DEBUG && process.env.NANOBANANA_DEBUG !== "false";
 function debug(jobId, ...args) {
   if (!DEBUG) return;
   const ts = (/* @__PURE__ */ new Date()).toISOString().slice(0, 23);
@@ -21331,7 +21331,7 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
 function createServer() {
   const server = new McpServer({
     name: "nanobanana",
-    version: "1.4.1"
+    version: "1.4.2"
   });
   const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
   const IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
@@ -21715,6 +21715,10 @@ ${summaries.join("\n")}`
   return server;
 }
 if (!process.env.NANOBANANA_TEST) {
+  if (DEBUG) {
+    debug("init", `server starting \u2014 NANOBANANA_DEBUG=${process.env.NANOBANANA_DEBUG}, OUTPUT_DIR=${getOutputDir()}`);
+    debug("init", `log file: ${join(getOutputDir(), ".nanobanana-debug.log")}`);
+  }
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
