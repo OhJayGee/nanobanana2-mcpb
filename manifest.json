@@ -48,10 +48,10 @@
       "default": "gemini-3.1-flash-image-preview"
     },
     "strip_metadata": {
-      "type": "string",
+      "type": "boolean",
       "title": "Strip Image Metadata",
-      "description": "Strip EXIF/IPTC metadata (GPS, device info, timestamps) from JPEG images before sending to the Gemini API. Only applies to JPEG — PNG, WebP, and HEIC metadata is not stripped. Set to 'false' to disable.",
-      "default": "true"
+      "description": "Strip EXIF/IPTC metadata (GPS, device info, timestamps) from JPEG images before sending to the Gemini API. Only applies to JPEG — PNG, WebP, and HEIC metadata is not stripped.",
+      "default": true
     }
   },
   "tools": [
