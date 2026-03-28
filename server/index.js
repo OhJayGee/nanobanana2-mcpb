@@ -15,6 +15,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-image-preview";
+if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
+  throw new Error(`Invalid GEMINI_MODEL value: ${GEMINI_MODEL}`);
+}
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 // No server-side timeout — let the MCP client (Claude Desktop) manage timeouts.
 // Our log notifications keep the client informed that work is in progress.
@@ -71,14 +74,14 @@ export function loadEstimates() {
     const validLevels = ["minimal", "high"];
     if (raw.table && typeof raw.table === "object" && !Array.isArray(raw.table)) {
       const allValid = validSizes.every(
-        (s) => raw.table[s] && validLevels.every((l) => typeof raw.table[s][l] === "number")
+        (s) => raw.table[s] && validLevels.every((l) => typeof raw.table[s][l] === "number" && isFinite(raw.table[s][l]) && raw.table[s][l] > 0)
       );
       if (allValid) estimateTable = raw.table;
     }
     if (raw.samples && typeof raw.samples === "object" && !Array.isArray(raw.samples)) {
       const samplesValid = validSizes.every(
         (s) => !raw.samples[s] || (typeof raw.samples[s] === "object" && !Array.isArray(raw.samples[s]) &&
-          validLevels.every((l) => raw.samples[s][l] === undefined || typeof raw.samples[s][l] === "number"))
+          validLevels.every((l) => raw.samples[s][l] === undefined || (typeof raw.samples[s][l] === "number" && isFinite(raw.samples[s][l]) && raw.samples[s][l] >= 0)))
       );
       if (samplesValid) sampleCounts = raw.samples;
     }
@@ -128,6 +131,7 @@ loadEstimates();
 const jobs = new Map(); // jobId → { status, filePath, prompt, image_size, thinking_level, error, startedAt, estimatedSeconds, completedAt }
 const JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_CONCURRENT_JOBS = 5;
+const MAX_TOTAL_JOBS = 100; // hard cap on Map size to prevent unbounded growth
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB per image
 
 export function pruneJobs() {
@@ -267,12 +271,19 @@ export async function loadImageParts(imagePaths) {
         throw err;
       }
       assertPathAllowed(realPath);
-      // Check file size before reading into memory
+      // Reject non-regular files (FIFOs, device files, directories)
       const stat = statSync(realPath);
+      if (!stat.isFile()) {
+        throw new Error(`Access denied: not a regular file: ${imgPath}`);
+      }
       if (stat.size > MAX_IMAGE_BYTES) {
         throw new Error(`Image file too large: ${imgPath} (${(stat.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)`);
       }
       const buffer = await readFile(realPath);
+      // Post-read size check guards against TOCTOU file swap
+      if (buffer.length > MAX_IMAGE_BYTES) {
+        throw new Error(`Image file too large after read: ${imgPath} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+      }
       // Validate magic bytes to prevent non-image file exfiltration
       validateImageBuffer(buffer, imgPath);
       return {
@@ -405,8 +416,8 @@ export function createServer() {
       description: "Queue image generation from a text prompt. Returns immediately with a job_id and the planned output file path. The image is generated asynchronously in the background — use check_generation with the job_id to poll for completion. Typical generation time is 10-30 seconds, but can take 90+ seconds for complex prompts or high resolution.",
       annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
-        prompt: z.string().describe("Text description of the image to generate"),
-        style: z.string().optional().describe("Artistic style instruction"),
+        prompt: z.string().max(10000).describe("Text description of the image to generate"),
+        style: z.string().max(2000).optional().describe("Artistic style instruction"),
         visual_dna: z.record(z.string()).optional().describe("Visual DNA JSON object to guide style consistency"),
         aspect_ratio: z.enum(ASPECT_RATIOS).default("1:1").describe("Output aspect ratio"),
         image_size: z.enum(IMAGE_SIZES).default("1K").describe("Resolution tier"),
@@ -415,13 +426,18 @@ export function createServer() {
     },
     async ({ prompt, style, visual_dna, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
+        pruneJobs();
         if (activeJobCount() >= MAX_CONCURRENT_JOBS) {
           throw new Error(`Too many concurrent jobs (${MAX_CONCURRENT_JOBS} max). Wait for existing jobs to finish.`);
+        }
+        if (jobs.size >= MAX_TOTAL_JOBS) {
+          throw new Error(`Job history full (${MAX_TOTAL_JOBS} max). Call check_generation to view and clear old jobs.`);
         }
         if (visual_dna) {
           const entries = Object.entries(visual_dna);
           if (entries.length > 20) throw new Error("visual_dna: too many keys (max 20)");
-          for (const [, v] of entries) {
+          for (const [k, v] of entries) {
+            if (k.length > 100) throw new Error("visual_dna: key too long (max 100 characters)");
             if (v.length > 500) throw new Error("visual_dna: value too long (max 500 characters)");
           }
         }
@@ -476,7 +492,7 @@ export function createServer() {
       annotations: { readOnlyHint: false, openWorldHint: true },
       inputSchema: {
         images: z.array(z.string()).min(1).max(14).describe("File paths to input images"),
-        prompt: z.string().describe("Edit instruction"),
+        prompt: z.string().max(10000).describe("Edit instruction"),
         aspect_ratio: z.enum(ASPECT_RATIOS).default("1:1").describe("Output aspect ratio"),
         image_size: z.enum(IMAGE_SIZES).default("1K").describe("Resolution tier"),
         thinking_level: z.enum(THINKING_LEVELS).default("high").describe("Reasoning depth: minimal (fastest, still uses some reasoning), high (complex scenes, text in images, precise adherence)"),
@@ -484,8 +500,12 @@ export function createServer() {
     },
     async ({ images, prompt, aspect_ratio, image_size, thinking_level }, ctx) => {
       try {
+        pruneJobs();
         if (activeJobCount() >= MAX_CONCURRENT_JOBS) {
           throw new Error(`Too many concurrent jobs (${MAX_CONCURRENT_JOBS} max). Wait for existing jobs to finish.`);
+        }
+        if (jobs.size >= MAX_TOTAL_JOBS) {
+          throw new Error(`Job history full (${MAX_TOTAL_JOBS} max). Call check_generation to view and clear old jobs.`);
         }
 
         // Reserve job slot immediately (before any await) to prevent race conditions

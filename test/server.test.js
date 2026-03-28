@@ -851,6 +851,20 @@ describe("loadImageParts success path", () => {
     );
   });
 
+  it("rejects non-regular files (directories)", async () => {
+    // Directories have image-like names sometimes; ensure they're rejected
+    const dirPath = join(tmpdir(), "nanobanana-fake-dir.png");
+    try { mkdirSync(dirPath); } catch { /* may exist */ }
+    try {
+      await assert.rejects(
+        () => loadImageParts([dirPath]),
+        /not a regular file/
+      );
+    } finally {
+      try { require("fs").rmdirSync(dirPath); } catch { /* best effort */ }
+    }
+  });
+
   it("rejects symlink pointing to non-image file", async () => {
     const symlinkPath = join(tmpdir(), "nanobanana-symlink-test.png");
     try { unlinkSync(symlinkPath); } catch { /* may not exist */ }
@@ -961,6 +975,40 @@ describe("loadEstimates / saveEstimates", () => {
     writeFileSync(getEstimatesFile(), JSON.stringify({ table: validTable, samples: [1, 2, 3] }));
     loadEstimates();
     assert.equal(getSampleCount("1K", "minimal"), countBefore);
+    unlinkSync(getEstimatesFile());
+    process.env.OUTPUT_DIR = origOutputDir || "";
+  });
+
+  it("loadEstimates ignores table with NaN values", () => {
+    process.env.OUTPUT_DIR = testDir;
+    mkdirSync(testDir, { recursive: true });
+    const before = estimateSeconds("1K", "minimal");
+    const nanTable = {
+      "0.5K": { minimal: 20, high: 30 },
+      "1K": { minimal: NaN, high: 45 },
+      "2K": { minimal: 50, high: 75 },
+      "4K": { minimal: 90, high: 135 },
+    };
+    writeFileSync(getEstimatesFile(), JSON.stringify({ table: nanTable }));
+    loadEstimates();
+    assert.equal(estimateSeconds("1K", "minimal"), before);
+    unlinkSync(getEstimatesFile());
+    process.env.OUTPUT_DIR = origOutputDir || "";
+  });
+
+  it("loadEstimates ignores table with Infinity values", () => {
+    process.env.OUTPUT_DIR = testDir;
+    mkdirSync(testDir, { recursive: true });
+    const before = estimateSeconds("1K", "high");
+    const infTable = {
+      "0.5K": { minimal: 20, high: 30 },
+      "1K": { minimal: 30, high: Infinity },
+      "2K": { minimal: 50, high: 75 },
+      "4K": { minimal: 90, high: 135 },
+    };
+    writeFileSync(getEstimatesFile(), JSON.stringify({ table: infTable }));
+    loadEstimates();
+    assert.equal(estimateSeconds("1K", "high"), before);
     unlinkSync(getEstimatesFile());
     process.env.OUTPUT_DIR = origOutputDir || "";
   });
