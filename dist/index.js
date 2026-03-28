@@ -21271,12 +21271,14 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
     }
   };
   const endpoint = `${GEMINI_BASE_URL}/${GEMINI_MODEL}:generateContent`;
+  const fetchStart = Date.now();
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(body),
     ...signal ? { signal } : {}
   });
+  const headersMs = Date.now() - fetchStart;
   if (!response.ok) {
     let message = `Gemini API error (${response.status})`;
     try {
@@ -21284,9 +21286,15 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
       if (errorBody?.error?.message) message += `: ${errorBody.error.message}`;
     } catch {
     }
+    if (DEBUG) debug("api", `${response.status} error after ${(headersMs / 1e3).toFixed(1)}s \u2014 ${message}`);
     throw new Error(message);
   }
   const data = await response.json();
+  const totalMs = Date.now() - fetchStart;
+  if (DEBUG) {
+    const bodyMs = totalMs - headersMs;
+    debug("api", `${modalities.join("+")} ${response.status} \u2014 headers: ${(headersMs / 1e3).toFixed(1)}s, body: ${(bodyMs / 1e3).toFixed(1)}s, total: ${(totalMs / 1e3).toFixed(1)}s`);
+  }
   if (data.error) {
     const msg = typeof data.error.message === "string" ? data.error.message : "unknown error";
     throw new Error(`Gemini API error: ${msg}`);
