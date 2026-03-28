@@ -33,8 +33,57 @@ The server currently hardcodes behavior for `gemini-3.1-flash-image-preview`. To
 
 7. **User config** — the `gemini_model` setting already exists in `manifest.json`; consider changing it to a dropdown with known-good values, or adding a separate "fallback model" setting
 
-### Not needed
+### Pricing comparison
+
+| Model | Cost per 1K image | $10/month budget |
+|-------|-------------------|------------------|
+| Nano Banana (2.5 Flash, GA) | ~$0.04 | ~256 images |
+| Nano Banana 2 (3.1 Flash, preview) | ~$0.07 | ~149 images |
+| Nano Banana Pro (3 Pro, preview) | ~$0.13 | ~74 images |
+
+Failed requests (503s) are not charged.
+
+### Not needed (for Gemini multi-model)
 
 - No endpoint changes — all three models use the same `generateContent` API
 - No response parsing changes — all return `inlineData.data` (base64 PNG)
 - No auth changes — same `x-goog-api-key` header
+
+---
+
+## Imagen 4 as Alternative Provider
+
+Imagen 4 is available via the same Google AI API key. Three variants confirmed accessible:
+
+| Model ID | Name | Speed |
+|----------|------|-------|
+| `imagen-4.0-generate-001` | Imagen 4 | Standard |
+| `imagen-4.0-ultra-generate-001` | Imagen 4 Ultra | Slow, highest quality |
+| `imagen-4.0-fast-generate-001` | Imagen 4 Fast | Fastest |
+
+### Key differences from Gemini Nano Banana models
+
+| | Gemini (current) | Imagen 4 |
+|---|---|---|
+| API method | `generateContent` | `predict` (different contract) |
+| Image editing | Yes (multi-image input) | **No** — text-to-image only |
+| Visual DNA / style transfer | Yes (via `visual_dna` param) | No |
+| Image description | Yes (`TEXT` modality) | No |
+| Auth | `x-goog-api-key` header | Same |
+| Response format | `inlineData.data` (base64) | TBD — needs investigation |
+
+### Integration scope
+
+Imagen 4 would only cover `generate_image` — it cannot replace `edit_image`, `extract_visual_dna`, or `describe_image` since those require image input or text output, which Imagen doesn't support.
+
+### Required work
+
+1. **Investigate `predict` API contract** — request/response format differs from `generateContent`; need to determine how prompt, aspect ratio, resolution, and number of outputs are specified
+
+2. **Separate API client** — `callGeminiAPI` is built around `generateContent`; Imagen needs its own client function or a generalized abstraction
+
+3. **Tool routing** — `generate_image` would need to decide which backend to use based on user config or a model selector parameter
+
+4. **Fallback chain** — could use Imagen 4 Fast as a fallback when Gemini preview models return 503, since it only needs to handle generation (not editing)
+
+5. **Pricing investigation** — Imagen 4 pricing not yet confirmed; needs research before committing to it as a default
