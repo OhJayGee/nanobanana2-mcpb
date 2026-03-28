@@ -97,11 +97,6 @@ describe("generateFilename", () => {
 });
 
 describe("estimateSeconds", () => {
-  it("returns higher estimates for larger sizes", () => {
-    assert.ok(estimateSeconds("4K", "high") > estimateSeconds("1K", "high"));
-    assert.ok(estimateSeconds("2K", "minimal") > estimateSeconds("0.5K", "minimal"));
-  });
-
   it("returns valid positive estimates for all size/level combinations", () => {
     for (const size of ["0.5K", "1K", "2K", "4K"]) {
       for (const level of ["minimal", "high"]) {

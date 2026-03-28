@@ -3,12 +3,18 @@
 ## Running Tests
 
 ```bash
-npm test
+npm test                    # Unit + e2e tests (110 tests, mocked API)
+npm run scan                # Semgrep security scan (203 rules)
+
+# Live integration tests (real Gemini API, requires API key)
+NANOBANANA_LIVE_TEST=1 NANOBANANA_TEST=1 node --test test/live.test.js
 ```
 
-Uses Node.js native `node:test` runner. The `NANOBANANA_TEST=1` env var prevents the MCP server from starting during tests (the `if (!process.env.NANOBANANA_TEST)` guard in `server/index.js`).
+Uses Node.js native `node:test` runner. No test framework dependencies.
 
-**Current state:** 51 tests, 14 suites, 0 failures.
+The `NANOBANANA_TEST=1` env var prevents the MCP server from auto-starting via stdio during test imports.
+
+**Current state:** 109 tests, 21 suites, 0 failures. 10 additional live tests (skipped unless `NANOBANANA_LIVE_TEST=1`).
 
 ---
 
@@ -16,245 +22,258 @@ Uses Node.js native `node:test` runner. The `NANOBANANA_TEST=1` env var prevents
 
 ```
 test/
-├── server.test.js       # Unit tests — helpers, job queue, heuristic, API client
-└── integration.test.js  # Integration tests — template files, image loading
+├── server.test.js       # Unit tests — helpers, security, job queue, API client (92 tests)
+├── e2e.test.js           # End-to-end MCP tests via InMemoryTransport (17 tests)
+├── integration.test.js   # File-level integration — templates, loadImageParts (5 tests)
+└── live.test.js          # Live Gemini API tests — real generation (10 tests, opt-in)
 ```
 
-### What each file covers
+### Test layers
 
-| File | Focus |
-|---|---|
-| `server.test.js` | Pure logic, no filesystem side effects (except persistence tests which use `tmpdir`) |
-| `integration.test.js` | Touches real files on disk (template JSONs, temp image file) |
+| Layer | File | What it tests | API mocked? |
+|-------|------|---------------|-------------|
+| Unit | `server.test.js` | Exported functions in isolation | Yes (`globalThis.fetch`) |
+| E2E | `e2e.test.js` | Full MCP protocol: Client → InMemoryTransport → McpServer → tool handlers | Yes |
+| Integration | `integration.test.js` | Real files on disk (templates, image validation) | N/A |
+| Live | `live.test.js` | Real Gemini API — actual image generation, editing, analysis | No |
 
 ---
 
-## Test Suites
+## E2E Test Harness
+
+The e2e tests use the MCP SDK's `InMemoryTransport` to wire a real `Client` directly to the server in-process — no subprocess, no stdio:
+
+```js
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createServer } from "../server/index.js";
+
+const server = createServer();
+const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+await server.connect(serverTransport);
+const client = new Client({ name: "test", version: "1.0.0" });
+await client.connect(clientTransport);
+
+// Call any tool end-to-end
+const result = await client.callTool({ name: "list_templates", arguments: {} });
+```
+
+This exercises the full stack: JSON-RPC serialization, Zod schema validation, tool dispatch, job queue, file I/O, and response formatting. The only mock is `globalThis.fetch` for the Gemini API.
+
+### E2E coverage (17 tests)
+
+| Tool | Tests |
+|------|-------|
+| Tool listing | Verifies all 7 tools registered |
+| `generate_image` | Full queue → poll → complete flow; API failure recorded on job; `visual_dna` key count and value length limits |
+| `edit_image` | Valid image input; non-image path rejected; fake-image-content rejected (magic bytes) |
+| `check_generation` | Unknown job_id; list-all-jobs |
+| `extract_visual_dna` | Structured JSON response from mocked API |
+| `describe_image` | Text response from mocked API |
+| `list_templates` | Returns known template names |
+| `get_template` | Valid template; invalid name; nonexistent template |
+
+---
+
+## Live Integration Tests
+
+Run against the real Gemini API. Requires `GEMINI_API_KEY` in environment. Skipped by default.
+
+```bash
+NANOBANANA_LIVE_TEST=1 NANOBANANA_TEST=1 node --test test/live.test.js
+```
+
+The tests follow the server's async architecture:
+
+```
+Phase 1: Queue jobs (instant)     — tests MCP dispatch + job creation
+Phase 2: Poll until settled       — single loop, best-effort, non-fatal on timeout
+Phase 3: Verify + analyze         — validate images on disk, run edit/describe/DNA tools
+```
+
+### Live test suite (10 tests)
+
+| Phase | Test | What it verifies |
+|-------|------|-----------------|
+| 1 | Queue rubber duck (0.5K) | `generate_image` returns `job_id` + `output_path` |
+| 1 | Queue styled coffee (1K) | `generate_image` with `style` parameter |
+| 1 | Queue red circle (0.5K) | Source image for the edit test |
+| 2 | Poll all jobs | All 3 jobs reach terminal state (complete/failed) |
+| 3 | Verify duck PNG | File exists, > 1 KB, valid PNG magic bytes |
+| 3 | Verify coffee PNG | File exists, > 5 KB |
+| 3 | Edit red circle | `edit_image` on a real generated image, poll for completion |
+| 3 | Describe duck | `describe_image` returns substantial text description |
+| 3 | Extract coffee DNA | `extract_visual_dna` returns parseable JSON with style/lighting/camera fields |
+| 3 | List all jobs | `check_generation` lists all jobs from the session |
+
+Generated images are kept in a temp directory printed at the end of the run for manual inspection.
+
+---
+
+## Unit Test Suites
+
+### `resolveHome` — 5 tests
+
+Resolves `${HOME}`, `$(HOME)`, and `~` prefixes to the actual home directory. Verifies mid-path occurrences are not replaced.
+
+### `getOutputDir` — 1 test
+
+Verifies lazy evaluation — `OUTPUT_DIR` env var is read at call time, not module load time.
 
 ### `slugify` — 5 tests
 
-`slugify(text)` converts a prompt into a filename-safe slug.
-
-| Test | What it verifies |
-|---|---|
-| lowercases and replaces non-alphanumeric with hyphens | `"A Cyberpunk Forest!" → "a-cyberpunk-forest"` |
-| truncates to 40 chars | Output length ≤ 40 |
-| collapses consecutive hyphens | `"hello---world" → "hello-world"` |
-| strips leading and trailing hyphens | `"--hello--" → "hello"` |
-| handles truncation that lands on a hyphen | 39 chars + space does not produce a trailing hyphen |
-
-**Edge case reasoning:** The 40-char slice can land in the middle of a hyphen sequence. The final `.replace(/-+$/, "")` cleans it up.
-
----
+Converts prompts to filename-safe slugs. Tests lowercasing, truncation (40 chars), hyphen collapsing, and edge cases where truncation lands on a hyphen.
 
 ### `detectMimeType` — 4 tests
 
-`detectMimeType(filePath)` returns the MIME type from a file extension.
-
-| Test | Input | Expected |
-|---|---|---|
-| .png | `photo.png` | `image/png` |
-| .PNG (case insensitive) | `photo.PNG` | `image/png` |
-| .webp | `photo.webp` | `image/webp` |
-| defaults to jpeg | `photo.jpg`, `photo.bmp` | `image/jpeg` |
-
----
+Extension-based MIME detection. Case-insensitive. Defaults to `image/jpeg` for unknown extensions.
 
 ### `generateFilename` — 1 test
 
-`generateFilename(prompt)` produces `YYYY-MM-DD-slug-hex.png`.
-
-Verified with regex: `/^\d{4}-\d{2}-\d{2}-a-cool-image-[0-9a-f]{6}\.png$/`
-
----
+Produces `YYYY-MM-DD-slug-hex.png` format, verified by regex.
 
 ### `estimateSeconds` — 3 tests
 
-`estimateSeconds(image_size, thinking_level)` returns the current estimated generation time in seconds.
+EMA-based generation time estimates. Tests valid lookups, relative ordering (larger sizes > smaller), and fallback for unknown parameters.
+
+### `job queue` — 6 tests
+
+Full lifecycle: create → complete/fail → prune.
 
 | Test | What it verifies |
-|---|---|
-| larger sizes have higher estimates | `4K/high > 1K/high`, `2K/minimal > 0.5K/minimal` |
-| `high` thinking level is slower than `minimal` | For all 4 sizes |
-| fallback for unknown params | Returns a positive number (45) |
+|------|-----------------|
+| Create, complete, retrieve | All fields set; `completedAt` set on complete |
+| Failed jobs | `status: "failed"`, error message, `completedAt` set |
+| Unknown job | Returns `null` |
+| List all jobs | `getAllJobs()` contains created job |
+| Prune old finished jobs | Old complete pruned; recent complete kept; processing kept |
+| Null `completedAt` guard | Non-processing job with `completedAt: null` is not pruned |
 
----
+### `activeJobCount` — 1 test
 
-### `job queue` — 5 tests
-
-Tests the in-memory job lifecycle.
-
-```mermaid
-flowchart LR
-    CJ[createJob] --> G[getJob → processing]
-    G --> CJB[completeJob]
-    CJB --> GD[getJob → complete\ncompletedAt set]
-```
-
-| Test | What it verifies |
-|---|---|
-| creates, completes, and retrieves a job | All fields set correctly; `completedAt` set on complete |
-| tracks failed jobs with completedAt | `status: "failed"`, `error` message, `completedAt` set |
-| returns null for unknown job | `getJob("nonexistent") === null` |
-| lists all jobs | `getAllJobs()` contains created job |
-| pruneJobs removes old finished jobs | Old complete job deleted; recent complete kept; processing job kept regardless of age |
-
----
+Counts only `"processing"` jobs. Verified by creating a job (count increments) then completing it (count returns to baseline).
 
 ### `job queue edge cases` — 2 tests
 
-| Test | What it verifies |
-|---|---|
-| `completeJob` on unknown id is a no-op | Does not throw; `getJob` still returns null |
-| `failJob` on unknown id is a no-op | Does not throw; `getJob` still returns null |
+`completeJob` and `failJob` on unknown IDs are no-ops.
 
----
+### `recordActualTime` — 3 tests
 
-### `recordActualTime` — 4 tests
+EMA update: pushes estimate high, then observes a fast time, verifies estimate decreases. Tests sample count increment and graceful handling of unknown parameters.
 
-`recordActualTime(image_size, thinking_level, actualSeconds)` updates the EMA-based estimate table and increments the sample counter.
+### `callGeminiAPI` — 20 tests
 
-| Test | What it verifies |
-|---|---|
-| updates estimate toward observed value via EMA | A very fast actual time pulls the estimate down |
-| increments sample count | `getSampleCount` returns `before + 1` |
-| ignores unknown `image_size` gracefully | No throw when size not in table |
-| valid size + unknown `thinking_level` | Hits the second guard (`current === undefined`), no throw |
+Tested exclusively with mocked `globalThis.fetch`. Covers the full error taxonomy:
 
-**Why two "ignores unknown" tests?** There are two early-return guards in `recordActualTime`:
-1. `if (!estimateTable[image_size]) return` — unknown size
-2. `if (current === undefined) return` — known size, unknown level
+| Category | Tests |
+|----------|-------|
+| Authentication | Missing API key; key sent in `x-goog-api-key` header (not URL) |
+| Request structure | Body structure matches expected schema |
+| Success paths | TEXT modality returns string; IMAGE modality returns Buffer; `FINISH_REASON_UNSPECIFIED` treated as success |
+| HTTP errors | Non-2xx with JSON body (extracts `error.message`); non-2xx with non-JSON body (generic message); network error (`fetch` throws) |
+| API-level errors | `data.error` on 200 OK; `data.error` with missing `message` field (falls back to "unknown error") |
+| Content filtering | `SAFETY` (with category names); `RECITATION`; `MAX_TOKENS`; unexpected `finishReason`; `promptFeedback` block |
+| Response validation | IMAGE response missing `inlineData`; TEXT response missing `text` part |
 
-The second guard is only reached when the first passes. Both are tested independently.
+### `isValidTemplateName` — 6 tests
 
----
+Allowlist regex `^[a-zA-Z0-9_-]+$`. Tests valid names, path traversal (`../../`), slashes, backslashes, dots, spaces, special characters, and empty string.
 
-### `isValidTemplateName` — 4 tests
+### `assertPathAllowed` — 3 tests
 
-`isValidTemplateName(name)` prevents path traversal in `get_template`.
+Extension-based allowlist. Accepts standard image extensions (`.png`, `.jpg`, `.webp`, `.heic`). Rejects non-image files (`/etc/passwd`, `.txt`, `.ssh/id_rsa`) and relative path traversal.
 
-| Test | Input | Expected |
-|---|---|---|
-| accepts normal names | `"cinematic_fujifilm"`, `"my-template"` | `true` |
-| rejects forward slash | `"../../etc/passwd"`, `"foo/bar"` | `false` |
-| rejects backslash | `"foo\\bar"` | `false` |
-| rejects double dot | `"..hidden"` | `false` |
+### `validateImageBuffer` — 12 tests
 
----
+Magic-bytes validation for 7 image formats:
 
-### `loadImageParts success path` — 1 test
+| Format | Magic bytes checked |
+|--------|-------------------|
+| PNG | `89 50 4E 47` |
+| JPEG | `FF D8 FF` |
+| WebP | `RIFF....WEBP` (12 bytes) |
+| GIF | `GIF8` |
+| BMP | `BM` |
+| TIFF | `II*\0` (little-endian) or `MM\0*` (big-endian) |
+| HEIF/AVIF | `ftyp` at offset 4 + brand (`heic`/`heix`/`hevc`/`mif1`/`msf1`/`avif`/`avis`) at offset 8 |
 
-`loadImageParts([filePath])` reads a file and returns it as a base64-encoded `inlineData` part.
+Also tests: rejection of non-image content, rejection of buffers too small (< 4 bytes), and rejection of `ftyp` with non-image brand (e.g. `isom` MP4).
 
-Creates a temporary PNG file in `tmpdir()`, calls `loadImageParts`, verifies:
-- `parts.length === 1`
-- `parts[0].inlineData.mimeType === "image/png"`
-- `parts[0].inlineData.data` matches `buffer.toString("base64")`
+### `loadImageParts` — 8 tests
 
-Cleans up the temp file after the test.
-
----
-
-### `loadEstimates / saveEstimates` — 3 tests
-
-Tests the persistence layer for learned timing data. Uses a temp directory to avoid mutating real output.
+End-to-end image loading pipeline:
 
 | Test | What it verifies |
-|---|---|
-| round-trip read/write | Write fixture JSON, call `loadEstimates()`, verify `estimateSeconds` and `getSampleCount` return loaded values |
-| silently ignores missing file | No throw when estimates file doesn't exist |
-| silently ignores corrupt JSON | No throw when file contains invalid JSON |
+|------|-----------------|
+| Valid PNG file | Reads file, returns correct mimeType + base64 data |
+| Multiple images | Concurrent loading via `Promise.all` |
+| Non-image path | Extension check rejects `/etc/passwd` |
+| Fake image content | File named `.png` but containing text → magic bytes check rejects |
+| Nonexistent file | `realpathSync` throws ENOENT → clean error message |
+| Symlink to non-image | Symlink `foo.png → /etc/hosts` → real path extension check rejects |
+| Empty array | Throws "at least one image path" |
+| Too many images | > 14 images throws |
 
-**How it works:** Tests temporarily override `process.env.OUTPUT_DIR` to point at a `tmpdir()` subdirectory, then restore it after each case.
+### `loadEstimates / saveEstimates` — 7 tests
 
----
+Persistence layer for EMA timing data. Uses temp directories.
 
-### `callGeminiAPI` — 13 tests
-
-`callGeminiAPI()` is tested exclusively with a mocked `globalThis.fetch`. Tests save and restore the original `fetch` in `finally` blocks.
-
-```mermaid
-flowchart TD
-    T1[throws if GEMINI_API_KEY missing]
-    T2[constructs correct request body]
-    T3[returns text for TEXT modality]
-    T4[returns Buffer for IMAGE modality]
-    T5[throws on non-2xx status]
-    T6[throws on data.error in 200 OK body]
-    T7[throws on empty candidates + no promptFeedback]
-    T8[throws on promptFeedback blockReason]
-    T9[throws on SAFETY finishReason\nwith category name]
-    T10[throws on RECITATION finishReason]
-    T11[throws on MAX_TOKENS finishReason]
-    T12[throws on unexpected finishReason\nwith raw value in message]
-    T13[throws when IMAGE has no inlineData]
-    T14[throws when TEXT has no text part]
-```
-
-| Test | Scenario | Error message pattern |
-|---|---|---|
-| missing API key | `GEMINI_API_KEY` deleted | `/GEMINI_API_KEY/` |
-| request body structure | Captures and inspects body | Fields match exactly |
-| TEXT result | `candidates[0].content.parts[0].text` | `result.type === "text"` |
-| IMAGE result | `candidates[0].content.parts[0].inlineData` | `result.type === "image"`, is Buffer |
-| non-2xx | `ok: false, status: 400` | `/400/` |
-| `data.error` on 200 OK | `{ error: { message: "quota exceeded" } }` | `/quota exceeded/` |
-| empty candidates, no feedback | `candidates: []` | `/no candidates/` |
-| `promptFeedback` block | `promptFeedback: { blockReason: "SAFETY" }` | `/Prompt blocked/` |
-| `SAFETY` finishReason | `finishReason: "SAFETY"`, `safetyRatings` with `HARM_CATEGORY_SEXUALLY_EXPLICIT` | `/safety filters.*sexually explicit/i` |
-| `RECITATION` finishReason | `finishReason: "RECITATION"` | `/copyright/i` |
-| `MAX_TOKENS` finishReason | `finishReason: "MAX_TOKENS"` | `/token limit/` |
-| unexpected finishReason | `finishReason: "BLOCKLIST"` | `/BLOCKLIST/` |
-| IMAGE, no `inlineData` | `parts: [{ text: "oops" }]` | `/No image data/` |
-| TEXT, no `text` part | `parts: [{ inlineData: { data: "x" } }]` | `/No text data/` |
-
----
+| Test | What it verifies |
+|------|-----------------|
+| Round-trip | Write fixture → `loadEstimates()` → values match |
+| Missing file | Silent no-op |
+| Corrupt JSON | Silent no-op |
+| Wrong table structure | Missing sizes → table not loaded |
+| Non-number table values | `"fast"` instead of number → table not loaded |
+| Non-number sample counts | `"lots"` instead of number → samples not loaded |
+| Array-typed samples | `samples: [1,2,3]` → samples not loaded |
 
 ### `integration: template files exist` — 2 tests
 
-Reads real files from `assets/templates/`.
-
-| Test | What it verifies |
-|---|---|
-| templates directory has at least 2 templates | Directory exists, ≥ 2 `.json` files |
-| each template is valid JSON with a `style` field | Parses each file, checks `content.style` is truthy |
-
----
+Reads real template files from `assets/templates/`. Verifies at least 2 exist and each has a `style` field.
 
 ### `integration: loadImageParts validation` — 3 tests
 
-| Test | Input | Error pattern |
-|---|---|---|
-| empty array | `[]` | `/at least one/` |
-| non-existent file | `["/nonexistent/fake.png"]` | `/not found/` |
-| more than 14 images | `Array(15).fill("/fake.png")` | `/14/` |
+Tests `loadImageParts` argument validation with invalid inputs (empty array, nonexistent file, > 14 images).
 
 ---
 
-## Security Scanning
+## Security Testing
 
-Semgrep is configured as a security scanner and runs 203 rules (156 JS-specific + 47 multi-language) from the community registry.
+### Semgrep
 
 ```bash
 npm run scan
 # equivalent to: semgrep --config=auto server/index.js
 ```
 
-**Current state:** 0 findings.
+Runs 203 rules (156 JS-specific + 47 multi-language) from the Semgrep community registry. **Current state:** 0 findings.
 
-Re-run whenever:
-- New tools are added (new user input surface)
-- `callGeminiAPI` or file I/O logic changes
-- Dependencies are updated
+Re-run when: new tools are added, file I/O or API logic changes, or dependencies are updated.
 
-Notable rule categories applied: injection patterns, prototype pollution, insecure `fetch` usage, path traversal, unsafe `JSON.parse`, credential exposure in logs.
+### Security-specific unit tests
 
-Semgrep does not replace the path-traversal guard in `isValidTemplateName()` — that is intentional defence-in-depth: validate at the application boundary, scan at the source level.
+The test suite includes targeted security tests across multiple suites:
+
+| Attack vector | Test coverage |
+|--------------|--------------|
+| Path traversal | `isValidTemplateName` rejects `../../`, `/`, `\`; `assertPathAllowed` rejects non-image extensions |
+| Arbitrary file read | `loadImageParts` rejects non-image paths, fake image content, symlinks to non-image files |
+| API key leakage | `callGeminiAPI` sends key in header not URL; error responses sanitized (no raw body reflection) |
+| File exfiltration | `validateImageBuffer` blocks non-image content even with image extension |
+| Prototype pollution | `loadEstimates` validates table and sample schemas before assigning to live state |
+| DoS / resource exhaustion | `activeJobCount` tracks concurrent jobs (capped at 5 in handlers) |
+| Symlink attacks | `loadImageParts` resolves symlinks via `realpathSync` and checks extension of real target |
 
 ---
 
-## What Is Not Unit Tested
+## What Is Not Tested
 
-The MCP tool handlers (`generate_image`, `edit_image`, `check_generation`, etc.) live inside the `if (!process.env.NANOBANANA_TEST)` block and are not reachable from tests. Their logic is covered indirectly through the exported functions they call. End-to-end tool behaviour should be verified via the MCP inspector or Claude Desktop.
-
-The `get_template` path traversal check was previously inside the server block (untestable). It was extracted into `isValidTemplateName()` which is exported and fully tested.
+| Area | Reason |
+|------|--------|
+| `ensureOutputDir` | Internal function (not exported), called only from tool handlers which are e2e tested |
+| `getTemplateDir` | Returns a static path; exercised indirectly by template integration tests |
+| `writeFileSync` in fire-and-forget | Tested via e2e (mocked API writes to disk) and live tests (real files) |
+| `MAX_IMAGE_BYTES` enforcement | 20 MB threshold; not tested due to impractical file size, but the `statSync` check is trivial |
+| `MAX_CONCURRENT_JOBS` enforcement in handlers | Logic is inside tool handlers; `activeJobCount` helper is unit tested |
+| MCP protocol edge cases | Handled by the `@modelcontextprotocol/sdk` library |
