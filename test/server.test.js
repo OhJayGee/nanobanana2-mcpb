@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { mkdirSync, writeFileSync, unlinkSync, existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { slugify, detectMimeType, generateFilename, callGeminiAPI, createJob, completeJob, failJob, getJob, getAllJobs, activeJobCount, estimateSeconds, recordActualTime, getSampleCount, pruneJobs, loadEstimates, saveEstimates, getEstimatesFile, isValidTemplateName, loadImageParts, assertPathAllowed, validateImageBuffer, resolveHome, getOutputDir } from "../server/index.js";
+import { slugify, detectMimeType, generateFilename, callGeminiAPI, createJob, completeJob, failJob, getJob, getAllJobs, activeJobCount, estimateSeconds, recordActualTime, getSampleCount, pruneJobs, loadEstimates, saveEstimates, getEstimatesFile, isValidTemplateName, loadImageParts, assertPathAllowed, validateImageBuffer, stripJpegMetadata, resolveHome, getOutputDir } from "../server/index.js";
 
 describe("getOutputDir", () => {
   it("reflects OUTPUT_DIR env var at call time (lazy evaluation)", () => {
@@ -793,6 +793,115 @@ describe("validateImageBuffer", () => {
   it("rejects buffers that are too small", () => {
     const buf = Buffer.from([0x89, 0x50]);
     assert.throws(() => validateImageBuffer(buf, "tiny.png"), /too small/);
+  });
+});
+
+describe("stripJpegMetadata", () => {
+  // Build a minimal JPEG with known segments for testing
+  function buildJpeg({ includeApp1, includeApp13, includeCom } = {}) {
+    const segments = [];
+    segments.push(Buffer.from([0xFF, 0xD8])); // SOI
+
+    // APP0 (JFIF) — should be kept
+    const jfifData = Buffer.from("JFIF\x00\x01\x01\x00");
+    const app0 = Buffer.alloc(2 + 2 + jfifData.length);
+    app0[0] = 0xFF; app0[1] = 0xE0;
+    app0.writeUInt16BE(jfifData.length + 2, 2);
+    jfifData.copy(app0, 4);
+    segments.push(app0);
+
+    // APP1 (EXIF) — should be stripped
+    if (includeApp1 !== false) {
+      const exifPayload = Buffer.from("Exif\x00\x00GPS:48.8566,2.3522;Device:iPhone15");
+      const app1 = Buffer.alloc(2 + 2 + exifPayload.length);
+      app1[0] = 0xFF; app1[1] = 0xE1;
+      app1.writeUInt16BE(exifPayload.length + 2, 2);
+      exifPayload.copy(app1, 4);
+      segments.push(app1);
+    }
+
+    // APP13 (IPTC) — should be stripped
+    if (includeApp13) {
+      const iptcPayload = Buffer.from("Photoshop 3.0\x00Creator:John");
+      const app13 = Buffer.alloc(2 + 2 + iptcPayload.length);
+      app13[0] = 0xFF; app13[1] = 0xED;
+      app13.writeUInt16BE(iptcPayload.length + 2, 2);
+      iptcPayload.copy(app13, 4);
+      segments.push(app13);
+    }
+
+    // COM (comment) — should be stripped
+    if (includeCom) {
+      const comment = Buffer.from("Edited with SecretApp v3.2");
+      const com = Buffer.alloc(2 + 2 + comment.length);
+      com[0] = 0xFF; com[1] = 0xFE;
+      com.writeUInt16BE(comment.length + 2, 2);
+      comment.copy(com, 4);
+      segments.push(com);
+    }
+
+    // SOS + fake image data + EOI
+    segments.push(Buffer.from([0xFF, 0xDA, 0x00, 0x02])); // SOS with minimal length
+    segments.push(Buffer.from([0x01, 0x02, 0x03])); // fake compressed data
+    segments.push(Buffer.from([0xFF, 0xD9])); // EOI
+
+    return Buffer.concat(segments);
+  }
+
+  it("strips APP1 (EXIF) segment from JPEG", () => {
+    const jpeg = buildJpeg();
+    const stripped = stripJpegMetadata(jpeg);
+    assert.ok(!stripped.includes("GPS:48.8566"), "EXIF GPS data should be removed");
+    assert.ok(!stripped.includes("iPhone15"), "EXIF device info should be removed");
+    assert.ok(stripped[0] === 0xFF && stripped[1] === 0xD8, "should start with SOI");
+    assert.ok(stripped.includes("JFIF"), "APP0 (JFIF) should be preserved");
+  });
+
+  it("strips APP13 (IPTC) and COM segments", () => {
+    const jpeg = buildJpeg({ includeApp13: true, includeCom: true });
+    const stripped = stripJpegMetadata(jpeg);
+    assert.ok(!stripped.includes("Photoshop"), "IPTC data should be removed");
+    assert.ok(!stripped.includes("SecretApp"), "comment should be removed");
+    assert.ok(stripped.includes("JFIF"), "APP0 should be preserved");
+  });
+
+  it("preserves image data (SOS to EOI)", () => {
+    const jpeg = buildJpeg();
+    const stripped = stripJpegMetadata(jpeg);
+    // SOS marker should be present
+    let hasSos = false;
+    for (let i = 0; i < stripped.length - 1; i++) {
+      if (stripped[i] === 0xFF && stripped[i + 1] === 0xDA) { hasSos = true; break; }
+    }
+    assert.ok(hasSos, "SOS marker should be preserved");
+    // EOI should be at end
+    assert.equal(stripped[stripped.length - 2], 0xFF);
+    assert.equal(stripped[stripped.length - 1], 0xD9);
+  });
+
+  it("produces a smaller buffer when EXIF is stripped", () => {
+    const jpeg = buildJpeg({ includeApp13: true, includeCom: true });
+    const stripped = stripJpegMetadata(jpeg);
+    assert.ok(stripped.length < jpeg.length, `stripped (${stripped.length}) should be smaller than original (${jpeg.length})`);
+  });
+
+  it("returns non-JPEG buffers unchanged", () => {
+    const png = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    const result = stripJpegMetadata(png);
+    assert.ok(result === png, "non-JPEG buffer should be returned by reference");
+  });
+
+  it("handles JPEG with no metadata segments", () => {
+    const jpeg = buildJpeg({ includeApp1: false });
+    const stripped = stripJpegMetadata(jpeg);
+    assert.ok(stripped[0] === 0xFF && stripped[1] === 0xD8, "should still be valid JPEG");
+    assert.ok(stripped.includes("JFIF"), "APP0 should still be present");
+  });
+
+  it("handles empty/tiny buffers without crashing", () => {
+    assert.doesNotThrow(() => stripJpegMetadata(Buffer.alloc(0)));
+    assert.doesNotThrow(() => stripJpegMetadata(Buffer.from([0xFF])));
+    assert.doesNotThrow(() => stripJpegMetadata(Buffer.from([0xFF, 0xD8])));
   });
 });
 

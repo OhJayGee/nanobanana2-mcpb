@@ -154,6 +154,7 @@ Set during installation via Claude Desktop's settings UI:
 | **Gemini API Key** | Your Google AI Studio API key | *(required)* |
 | **Output Directory** | Where generated images are saved | `~/Desktop/nanobanana-output` |
 | **Gemini Model** | Model ID (change when GA) | `gemini-3.1-flash-image-preview` |
+| **Strip Image Metadata** | Strip EXIF/IPTC from JPEGs before sending to API | `true` |
 
 ## Parameters
 

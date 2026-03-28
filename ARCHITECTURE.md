@@ -314,8 +314,11 @@ Configured at install time via Claude Desktop's settings UI. Passed as environme
 | Gemini API Key | `GEMINI_API_KEY` | required |
 | Output Directory | `OUTPUT_DIR` | `~/Desktop/nanobanana-output` |
 | Gemini Model | `GEMINI_MODEL` | `gemini-3.1-flash-image-preview` |
+| Strip Image Metadata | `STRIP_METADATA` | `true` |
 
 `OUTPUT_DIR` is evaluated lazily via `getOutputDir()` (not frozen at module load). Supports `${HOME}`, `$(HOME)`, and `~` prefixes that the MCPB runtime may pass through literally.
+
+`STRIP_METADATA` controls automatic JPEG EXIF/IPTC stripping in `loadImageParts`. When enabled (default), APP1 (EXIF), APP13 (IPTC), and COM segments are removed from JPEG buffers before base64 encoding. Non-JPEG formats are passed through unchanged.
 
 ---
 

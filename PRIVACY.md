@@ -1,6 +1,6 @@
 # Privacy Policy — Nanobanana Image Studio
 
-**Last updated:** 2026-03-22
+**Last updated:** 2026-03-28
 
 ## What data is sent externally
 
@@ -9,6 +9,22 @@ This extension sends the following data to Google's Gemini API (`generativelangu
 - **Text prompts** you provide for image generation, editing, or description
 - **Image data** (base64-encoded) when using edit, describe, or extract DNA tools
 - **Configuration parameters** such as aspect ratio, resolution, and thinking level
+
+## Image metadata stripping
+
+By default, EXIF and IPTC metadata is automatically stripped from **JPEG** images before they are sent to the Gemini API. This removes:
+
+- GPS coordinates (location where the photo was taken)
+- Device information (camera/phone model, serial number)
+- Timestamps (original capture date/time)
+- IPTC data (creator name, copyright, captions)
+- Comments embedded by editing software
+
+This applies to images passed to `edit_image`, `describe_image`, and `extract_visual_dna`. Generated output images from Gemini (always PNG) do not contain EXIF data.
+
+To disable metadata stripping (e.g., if you need Gemini to analyze photo metadata), set **Strip Image Metadata** to `false` in the extension settings.
+
+Note: metadata stripping currently applies to JPEG files only. PNG, WebP, HEIC, and other formats do not have their metadata stripped. If you are concerned about metadata in non-JPEG files, strip it manually before using the extension.
 
 ## What data stays local
 

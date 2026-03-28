@@ -19,6 +19,9 @@ if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
   throw new Error(`Invalid GEMINI_MODEL value: ${GEMINI_MODEL}`);
 }
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+// Strip EXIF/IPTC metadata from JPEG images before sending to Gemini API.
+// Enabled by default; set STRIP_METADATA=false to disable.
+const STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 // No server-side timeout — let the MCP client (Claude Desktop) manage timeouts.
 // Our log notifications keep the client informed that work is in progress.
 
@@ -251,6 +254,58 @@ export function validateImageBuffer(buffer, imgPath) {
   }
 }
 
+// Strip EXIF (APP1), IPTC (APP13), and comment (COM) segments from JPEG buffers.
+// Non-JPEG buffers are returned unchanged. Preserves all image data and rendering-
+// relevant segments (APP0/JFIF, DQT, SOF, DHT, SOS, ICC/APP2).
+const JPEG_STRIP_MARKERS = new Set([0xE1, 0xED, 0xFE]); // APP1, APP13, COM
+
+export function stripJpegMetadata(buffer) {
+  if (buffer.length < 4 || buffer[0] !== 0xFF || buffer[1] !== 0xD8) return buffer;
+
+  const parts = [buffer.subarray(0, 2)]; // SOI
+  let offset = 2;
+
+  while (offset < buffer.length - 1) {
+    if (buffer[offset] !== 0xFF) break;
+    const marker = buffer[offset + 1];
+
+    // SOI or EOI — 2-byte markers with no length field
+    if (marker === 0xD8 || marker === 0xD9) {
+      parts.push(buffer.subarray(offset, offset + 2));
+      offset += 2;
+      continue;
+    }
+
+    // SOS (start of scan) — copy everything from here to EOF (compressed image data)
+    if (marker === 0xDA) {
+      parts.push(buffer.subarray(offset));
+      break;
+    }
+
+    // RST markers (D0-D7) — 2-byte, no length
+    if (marker >= 0xD0 && marker <= 0xD7) {
+      parts.push(buffer.subarray(offset, offset + 2));
+      offset += 2;
+      continue;
+    }
+
+    // All other markers: FF XX LL LL [data]
+    if (offset + 3 >= buffer.length) break;
+    const segLength = buffer.readUInt16BE(offset + 2);
+    const segEnd = offset + 2 + segLength;
+    if (segEnd > buffer.length) break; // malformed — stop parsing
+
+    if (JPEG_STRIP_MARKERS.has(marker)) {
+      offset = segEnd; // skip this segment
+    } else {
+      parts.push(buffer.subarray(offset, segEnd)); // keep
+      offset = segEnd;
+    }
+  }
+
+  return Buffer.concat(parts);
+}
+
 export async function loadImageParts(imagePaths) {
   if (!imagePaths || imagePaths.length === 0) {
     throw new Error("at least one image path is required");
@@ -286,10 +341,12 @@ export async function loadImageParts(imagePaths) {
       }
       // Validate magic bytes to prevent non-image file exfiltration
       validateImageBuffer(buffer, imgPath);
+      // Strip EXIF/IPTC metadata from JPEG images if enabled
+      const finalBuffer = STRIP_METADATA ? stripJpegMetadata(buffer) : buffer;
       return {
         inlineData: {
           mimeType: detectMimeType(imgPath),
-          data: buffer.toString("base64"),
+          data: finalBuffer.toString("base64"),
         },
       };
     })

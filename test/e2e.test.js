@@ -232,6 +232,49 @@ describe("MCP server e2e", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Metadata stripping
+  // -------------------------------------------------------------------------
+
+  it("edit_image strips EXIF metadata from JPEG before sending to API", async () => {
+    // Build a JPEG with EXIF containing fake GPS data
+    const soi = Buffer.from([0xFF, 0xD8]);
+    const exifPayload = Buffer.from("Exif\x00\x00GPS:SECRET-LOCATION");
+    const app1 = Buffer.alloc(2 + 2 + exifPayload.length);
+    app1[0] = 0xFF; app1[1] = 0xE1;
+    app1.writeUInt16BE(exifPayload.length + 2, 2);
+    exifPayload.copy(app1, 4);
+    const sos = Buffer.from([0xFF, 0xDA, 0x00, 0x02]);
+    const data = Buffer.from([0xFF, 0xD9]);
+    const jpegWithExif = Buffer.concat([soi, app1, sos, data]);
+
+    const jpegPath = join(testDir, "exif-test.jpg");
+    writeFileSync(jpegPath, jpegWithExif);
+
+    let capturedBody;
+    globalThis.fetch = async (url, opts) => {
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ inlineData: { mimeType: "image/jpeg", data: soi.toString("base64") } }] } }],
+        }),
+      };
+    };
+
+    await client.callTool({
+      name: "edit_image",
+      arguments: { images: [jpegPath], prompt: "test edit", image_size: "0.5K", thinking_level: "minimal" },
+    });
+
+    // Decode the base64 that was sent to the API and verify EXIF is gone
+    const sentParts = capturedBody.contents[0].parts;
+    const imagePart = sentParts.find((p) => p.inlineData);
+    const sentBytes = Buffer.from(imagePart.inlineData.data, "base64");
+    assert.ok(!sentBytes.includes("SECRET-LOCATION"), "EXIF GPS data should be stripped before sending to API");
+    assert.ok(sentBytes[0] === 0xFF && sentBytes[1] === 0xD8, "should still be valid JPEG");
+  });
+
+  // -------------------------------------------------------------------------
   // extract_visual_dna
   // -------------------------------------------------------------------------
 

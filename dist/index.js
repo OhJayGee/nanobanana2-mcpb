@@ -20998,6 +20998,7 @@ if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
   throw new Error(`Invalid GEMINI_MODEL value: ${GEMINI_MODEL}`);
 }
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+var STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 var HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
 if (!HOME_DIR) {
   throw new Error("Cannot determine home directory: HOME and USERPROFILE are both unset.");
@@ -21160,6 +21161,41 @@ function validateImageBuffer(buffer, imgPath) {
     throw new Error(`Access denied: file does not contain valid image data: ${imgPath}`);
   }
 }
+var JPEG_STRIP_MARKERS = /* @__PURE__ */ new Set([225, 237, 254]);
+function stripJpegMetadata(buffer) {
+  if (buffer.length < 4 || buffer[0] !== 255 || buffer[1] !== 216) return buffer;
+  const parts = [buffer.subarray(0, 2)];
+  let offset = 2;
+  while (offset < buffer.length - 1) {
+    if (buffer[offset] !== 255) break;
+    const marker = buffer[offset + 1];
+    if (marker === 216 || marker === 217) {
+      parts.push(buffer.subarray(offset, offset + 2));
+      offset += 2;
+      continue;
+    }
+    if (marker === 218) {
+      parts.push(buffer.subarray(offset));
+      break;
+    }
+    if (marker >= 208 && marker <= 215) {
+      parts.push(buffer.subarray(offset, offset + 2));
+      offset += 2;
+      continue;
+    }
+    if (offset + 3 >= buffer.length) break;
+    const segLength = buffer.readUInt16BE(offset + 2);
+    const segEnd = offset + 2 + segLength;
+    if (segEnd > buffer.length) break;
+    if (JPEG_STRIP_MARKERS.has(marker)) {
+      offset = segEnd;
+    } else {
+      parts.push(buffer.subarray(offset, segEnd));
+      offset = segEnd;
+    }
+  }
+  return Buffer.concat(parts);
+}
 async function loadImageParts(imagePaths) {
   if (!imagePaths || imagePaths.length === 0) {
     throw new Error("at least one image path is required");
@@ -21190,10 +21226,11 @@ async function loadImageParts(imagePaths) {
         throw new Error(`Image file too large after read: ${imgPath} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
       }
       validateImageBuffer(buffer, imgPath);
+      const finalBuffer = STRIP_METADATA ? stripJpegMetadata(buffer) : buffer;
       return {
         inlineData: {
           mimeType: detectMimeType(imgPath),
-          data: buffer.toString("base64")
+          data: finalBuffer.toString("base64")
         }
       };
     })
@@ -21659,5 +21696,6 @@ export {
   resolveHome,
   saveEstimates,
   slugify,
+  stripJpegMetadata,
   validateImageBuffer
 };

@@ -21,7 +21,8 @@
       "env": {
         "GEMINI_API_KEY": "${user_config.gemini_api_key}",
         "OUTPUT_DIR": "${user_config.output_directory}",
-        "GEMINI_MODEL": "${user_config.gemini_model}"
+        "GEMINI_MODEL": "${user_config.gemini_model}",
+        "STRIP_METADATA": "${user_config.strip_metadata}"
       }
     }
   },
@@ -45,6 +46,12 @@
       "title": "Gemini Model",
       "description": "Gemini model ID for image generation. Change when Google promotes the model from preview to GA.",
       "default": "gemini-3.1-flash-image-preview"
+    },
+    "strip_metadata": {
+      "type": "string",
+      "title": "Strip Image Metadata",
+      "description": "Strip EXIF/IPTC metadata (GPS coordinates, device info, timestamps) from JPEG images before sending to the Gemini API. Set to 'false' to disable.",
+      "default": "true"
     }
   },
   "tools": [
