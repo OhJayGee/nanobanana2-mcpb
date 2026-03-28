@@ -21331,7 +21331,7 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
 function createServer() {
   const server = new McpServer({
     name: "nanobanana",
-    version: "1.4.0"
+    version: "1.4.1"
   });
   const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
   const IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
