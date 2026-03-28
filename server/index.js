@@ -476,7 +476,7 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
 export function createServer() {
   const server = new McpServer({
     name: "nanobanana",
-    version: "1.4.2",
+    version: "1.4.3",
   });
 
   const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
@@ -878,9 +878,14 @@ export function createServer() {
 }
 
 if (!process.env.NANOBANANA_TEST) {
+  // Always write a one-line startup probe so we can verify env vars are reaching the server
+  try {
+    mkdirSync(getOutputDir(), { recursive: true });
+    appendFileSync(join(getOutputDir(), ".nanobanana-debug.log"),
+      `${new Date().toISOString().slice(0, 23)} [init] server v1.4.3 starting — DEBUG=${process.env.NANOBANANA_DEBUG ?? "(unset)"}, STRIP_METADATA=${process.env.STRIP_METADATA ?? "(unset)"}, MODEL=${GEMINI_MODEL}\n`);
+  } catch { /* non-fatal */ }
   if (DEBUG) {
-    debug("init", `server starting — NANOBANANA_DEBUG=${process.env.NANOBANANA_DEBUG}, OUTPUT_DIR=${getOutputDir()}`);
-    debug("init", `log file: ${join(getOutputDir(), ".nanobanana-debug.log")}`);
+    debug("init", `debug logging active — log file: ${join(getOutputDir(), ".nanobanana-debug.log")}`);
   }
   const server = createServer();
   const transport = new StdioServerTransport();

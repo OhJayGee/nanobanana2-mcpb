@@ -21331,7 +21331,7 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
 function createServer() {
   const server = new McpServer({
     name: "nanobanana",
-    version: "1.4.2"
+    version: "1.4.3"
   });
   const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1", "2:3", "3:2"];
   const IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
@@ -21715,9 +21715,17 @@ ${summaries.join("\n")}`
   return server;
 }
 if (!process.env.NANOBANANA_TEST) {
+  try {
+    mkdirSync(getOutputDir(), { recursive: true });
+    appendFileSync(
+      join(getOutputDir(), ".nanobanana-debug.log"),
+      `${(/* @__PURE__ */ new Date()).toISOString().slice(0, 23)} [init] server v1.4.3 starting \u2014 DEBUG=${process.env.NANOBANANA_DEBUG ?? "(unset)"}, STRIP_METADATA=${process.env.STRIP_METADATA ?? "(unset)"}, MODEL=${GEMINI_MODEL}
+`
+    );
+  } catch {
+  }
   if (DEBUG) {
-    debug("init", `server starting \u2014 NANOBANANA_DEBUG=${process.env.NANOBANANA_DEBUG}, OUTPUT_DIR=${getOutputDir()}`);
-    debug("init", `log file: ${join(getOutputDir(), ".nanobanana-debug.log")}`);
+    debug("init", `debug logging active \u2014 log file: ${join(getOutputDir(), ".nanobanana-debug.log")}`);
   }
   const server = createServer();
   const transport = new StdioServerTransport();
