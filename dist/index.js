@@ -21000,6 +21000,13 @@ if (!/^[a-zA-Z0-9._-]+$/.test(GEMINI_MODEL)) {
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 var API_TIMEOUT_MS = 5 * 60 * 1e3;
+var DEBUG = process.env.NANOBANANA_DEBUG === "1";
+function debug(jobId, ...args) {
+  if (!DEBUG) return;
+  const ts = (/* @__PURE__ */ new Date()).toISOString().slice(11, 23);
+  process.stderr.write(`[nanobanana ${ts}] [${jobId}] ${args.join(" ")}
+`);
+}
 var HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
 if (!HOME_DIR) {
   throw new Error("Cannot determine home directory: HOME and USERPROFILE are both unset.");
@@ -21366,6 +21373,7 @@ function createServer() {
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+        debug(jobId, `generate \u2192 ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21374,11 +21382,15 @@ function createServer() {
           signal: controller.signal
         }).then((result) => {
           clearTimeout(timeout);
+          debug(jobId, `API returned ${result.data.length} bytes`);
           writeFileSync(filePath, result.data);
+          debug(jobId, `wrote ${filePath}`);
           completeJob(jobId);
+          debug(jobId, `complete`);
         }).catch((err) => {
           clearTimeout(timeout);
           const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          debug(jobId, `FAILED: ${msg}`);
           failJob(jobId, msg);
         });
         try {
@@ -21433,8 +21445,11 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
         let imageParts;
         try {
+          debug(jobId, `loading ${images.length} image(s): ${images.map((p) => p.split("/").pop()).join(", ")}`);
           imageParts = await loadImageParts(images);
+          debug(jobId, `images loaded, total parts: ${imageParts.length}`);
         } catch (err) {
+          debug(jobId, `image load FAILED: ${err.message}`);
           failJob(jobId, err.message);
           throw err;
         }
@@ -21442,6 +21457,7 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+        debug(jobId, `edit \u2192 ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -21450,11 +21466,15 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
           signal: controller.signal
         }).then((result) => {
           clearTimeout(timeout);
+          debug(jobId, `API returned ${result.data.length} bytes`);
           writeFileSync(filePath, result.data);
+          debug(jobId, `wrote ${filePath}`);
           completeJob(jobId);
+          debug(jobId, `complete`);
         }).catch((err) => {
           clearTimeout(timeout);
           const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          debug(jobId, `FAILED: ${msg}`);
           failJob(jobId, msg);
         });
         try {
@@ -21574,6 +21594,7 @@ Prompt: ${job.prompt}`
     },
     async ({ images }, ctx) => {
       try {
+        debug("dna", `extract_visual_dna called with ${images.length} image(s)`);
         const imageParts = await loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
@@ -21581,14 +21602,17 @@ Prompt: ${job.prompt}`
           await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`);
         } catch {
         }
+        debug("dna", `calling Gemini API...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
           thinkingLevel: "minimal",
           includeThoughts: false
         });
+        debug("dna", `complete, ${result.data.length} chars returned`);
         return { content: [{ type: "text", text: result.data }] };
       } catch (err) {
+        debug("dna", `FAILED: ${err.message}`);
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
       }
     }
@@ -21605,18 +21629,21 @@ Prompt: ${job.prompt}`
     },
     async ({ images }, ctx) => {
       try {
+        debug("desc", `describe_image called with ${images.length} image(s)`);
         const imageParts = await loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
         try {
           await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`);
         } catch {
         }
+        debug("desc", `calling Gemini API...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
           thinkingLevel: "minimal",
           includeThoughts: false
         });
+        debug("desc", `complete, ${result.data.length} chars returned`);
         return { content: [{ type: "text", text: result.data }] };
       } catch (err) {
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };

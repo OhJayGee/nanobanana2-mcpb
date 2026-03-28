@@ -25,6 +25,14 @@ const STRIP_METADATA = process.env.STRIP_METADATA !== "false";
 // Background API calls (fire-and-forget) use their own timeout via AbortController.
 // Without this, a hung Gemini connection would leave a job stuck in "processing" forever.
 const API_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max per API call
+// Debug logging: set NANOBANANA_DEBUG=1 to see timestamped API call lifecycle on stderr.
+// Not exposed in MCPB config — for local development only.
+const DEBUG = process.env.NANOBANANA_DEBUG === "1";
+function debug(jobId, ...args) {
+  if (!DEBUG) return;
+  const ts = new Date().toISOString().slice(11, 23);
+  process.stderr.write(`[nanobanana ${ts}] [${jobId}] ${args.join(" ")}\n`);
+}
 
 const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "";
 if (!HOME_DIR) {
@@ -519,6 +527,7 @@ export function createServer() {
         // Without this, a hung connection would leave the job stuck in "processing" forever.
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+        debug(jobId, `generate → ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -527,11 +536,15 @@ export function createServer() {
           signal: controller.signal,
         }).then((result) => {
           clearTimeout(timeout);
+          debug(jobId, `API returned ${result.data.length} bytes`);
           writeFileSync(filePath, result.data);
+          debug(jobId, `wrote ${filePath}`);
           completeJob(jobId);
+          debug(jobId, `complete`);
         }).catch((err) => {
           clearTimeout(timeout);
           const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          debug(jobId, `FAILED: ${msg}`);
           failJob(jobId, msg);
         });
 
@@ -585,8 +598,11 @@ export function createServer() {
         // Validate images (may await). If validation fails, mark job as failed.
         let imageParts;
         try {
+          debug(jobId, `loading ${images.length} image(s): ${images.map(p => p.split("/").pop()).join(", ")}`);
           imageParts = await loadImageParts(images);
+          debug(jobId, `images loaded, total parts: ${imageParts.length}`);
         } catch (err) {
+          debug(jobId, `image load FAILED: ${err.message}`);
           failJob(jobId, err.message);
           throw err;
         }
@@ -597,6 +613,7 @@ export function createServer() {
         // Fire-and-forget with timeout: abort if Gemini doesn't respond within API_TIMEOUT_MS.
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+        debug(jobId, `edit → ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
         callGeminiAPI({
           parts,
           modalities: ["IMAGE"],
@@ -605,11 +622,15 @@ export function createServer() {
           signal: controller.signal,
         }).then((result) => {
           clearTimeout(timeout);
+          debug(jobId, `API returned ${result.data.length} bytes`);
           writeFileSync(filePath, result.data);
+          debug(jobId, `wrote ${filePath}`);
           completeJob(jobId);
+          debug(jobId, `complete`);
         }).catch((err) => {
           clearTimeout(timeout);
           const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+          debug(jobId, `FAILED: ${msg}`);
           failJob(jobId, msg);
         });
 
@@ -729,20 +750,24 @@ export function createServer() {
     },
     async ({ images }, ctx) => {
       try {
+        debug("dna", `extract_visual_dna called with ${images.length} image(s)`);
         const imageParts = await loadImageParts(images);
         const extractPrompt = "Analyze the provided image(s) and extract their core visual DNA into a structured JSON object. Include fields for: style, scene, subject, camera, lighting, materials, colors. ONLY output the raw JSON without markdown code blocks.";
         const parts = [...imageParts, { text: extractPrompt }];
 
         try { await ctx?.mcpReq?.log("info", `Extracting visual DNA from ${images.length} image(s)...`); } catch { /* non-fatal */ }
+        debug("dna", `calling Gemini API...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
           thinkingLevel: "minimal",
           includeThoughts: false,
         });
+        debug("dna", `complete, ${result.data.length} chars returned`);
 
         return { content: [{ type: "text", text: result.data }] };
       } catch (err) {
+        debug("dna", `FAILED: ${err.message}`);
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
       }
     }
@@ -761,16 +786,19 @@ export function createServer() {
     },
     async ({ images }, ctx) => {
       try {
+        debug("desc", `describe_image called with ${images.length} image(s)`);
         const imageParts = await loadImageParts(images);
         const parts = [...imageParts, { text: "Provide a highly detailed, comprehensive description of the provided image(s)." }];
 
         try { await ctx?.mcpReq?.log("info", `Describing ${images.length} image(s)...`); } catch { /* non-fatal */ }
+        debug("desc", `calling Gemini API...`);
         const result = await callGeminiAPI({
           parts,
           modalities: ["TEXT"],
           thinkingLevel: "minimal",
           includeThoughts: false,
         });
+        debug("desc", `complete, ${result.data.length} chars returned`);
 
         return { content: [{ type: "text", text: result.data }] };
       } catch (err) {
