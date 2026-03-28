@@ -21265,7 +21265,7 @@ async function callGeminiAPI({ parts, modalities, thinkingLevel, includeThoughts
   }
   return { type: "text", data: textPart.text };
 }
-if (!process.env.NANOBANANA_TEST) {
+function createServer() {
   const server = new McpServer({
     name: "nanobanana",
     version: "1.0.0"
@@ -21608,6 +21608,10 @@ ${summaries.join("\n")}`
       }
     }
   );
+  return server;
+}
+if (!process.env.NANOBANANA_TEST) {
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -21617,6 +21621,7 @@ export {
   callGeminiAPI,
   completeJob,
   createJob,
+  createServer,
   detectMimeType,
   estimateSeconds,
   failJob,

@@ -387,7 +387,7 @@ export async function callGeminiAPI({ parts, modalities, thinkingLevel, includeT
 // MCP Server (only starts when not in test mode)
 // ---------------------------------------------------------------------------
 
-if (!process.env.NANOBANANA_TEST) {
+export function createServer() {
   const server = new McpServer({
     name: "nanobanana",
     version: "1.0.0",
@@ -746,7 +746,11 @@ if (!process.env.NANOBANANA_TEST) {
     }
   );
 
-  // --- Start server ---
+  return server;
+}
+
+if (!process.env.NANOBANANA_TEST) {
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

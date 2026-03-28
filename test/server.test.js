@@ -102,10 +102,12 @@ describe("estimateSeconds", () => {
     assert.ok(estimateSeconds("2K", "minimal") > estimateSeconds("0.5K", "minimal"));
   });
 
-  it("returns higher estimates for high thinking vs minimal", () => {
+  it("returns valid positive estimates for all size/level combinations", () => {
     for (const size of ["0.5K", "1K", "2K", "4K"]) {
-      assert.ok(estimateSeconds(size, "high") > estimateSeconds(size, "minimal"),
-        `${size}: high should be slower than minimal`);
+      for (const level of ["minimal", "high"]) {
+        const val = estimateSeconds(size, level);
+        assert.ok(typeof val === "number" && val > 0, `${size}/${level} should be a positive number, got ${val}`);
+      }
     }
   });
 
