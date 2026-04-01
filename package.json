@@ -1,6 +1,6 @@
 {
   "name": "nanobanana-mcpb",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "Nanobanana Image Studio — MCP Bundle for Claude Desktop",
   "type": "module",
   "private": true,
