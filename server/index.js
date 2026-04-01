@@ -154,6 +154,67 @@ const MAX_CONCURRENT_JOBS = 5;
 const MAX_TOTAL_JOBS = 100; // hard cap on Map size to prevent unbounded growth
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB per image
 
+// ---------------------------------------------------------------------------
+// API Call Throttle — limits concurrent fetches + staggers requests
+// Prevents the Gemini API from silently dropping requests when too many
+// arrive simultaneously from the same API key.
+// ---------------------------------------------------------------------------
+
+const MAX_CONCURRENT_API_CALLS = 2;
+const STAGGER_DELAY_MS = process.env.NANOBANANA_TEST ? 0 : 10_000; // 10s base delay (0 in tests)
+const STAGGER_JITTER_MS = process.env.NANOBANANA_TEST ? 0 : 2_000; // ±2s jitter (0 in tests)
+let apiCallsInFlight = 0;
+const apiQueue = []; // { run: () => void }
+let lastApiCallStart = 0;
+
+function staggerDelay() {
+  return STAGGER_DELAY_MS + Math.round((Math.random() * 2 - 1) * STAGGER_JITTER_MS);
+}
+
+function scheduleNextApiCall() {
+  if (apiQueue.length === 0) return;
+  if (apiCallsInFlight >= MAX_CONCURRENT_API_CALLS) return;
+
+  const now = Date.now();
+  const elapsed = now - lastApiCallStart;
+  const targetDelay = staggerDelay();
+  const delay = Math.max(0, targetDelay - elapsed);
+
+  setTimeout(() => {
+    if (apiQueue.length === 0) return;
+    if (apiCallsInFlight >= MAX_CONCURRENT_API_CALLS) return;
+
+    const { run } = apiQueue.shift();
+    apiCallsInFlight++;
+    lastApiCallStart = Date.now();
+    run();
+  }, delay);
+}
+
+function releaseApiSlot() {
+  apiCallsInFlight--;
+  scheduleNextApiCall();
+}
+
+// Returns the queue position (0-based) and estimated wait in seconds
+export function enqueueApiCall(fn) {
+  const position = apiQueue.length;
+  return new Promise((resolve) => {
+    apiQueue.push({
+      run: () => resolve(fn()),
+    });
+    scheduleNextApiCall();
+  }).finally(releaseApiSlot);
+}
+
+export function apiQueuePosition() {
+  return apiQueue.length;
+}
+
+export function apiCallsActive() {
+  return apiCallsInFlight;
+}
+
 export function pruneJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, job] of jobs) {
@@ -536,32 +597,37 @@ export function createServer() {
 
         const parts = [{ text: JSON.stringify(jsonPrompt) }];
 
-        const estimated = estimateSeconds(image_size, thinking_level);
+        const baseEstimate = estimateSeconds(image_size, thinking_level);
+        const queueWait = apiQueue.length * STAGGER_DELAY_MS / 1000;
+        const estimated = Math.round(baseEstimate + queueWait);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
 
-        // Fire-and-forget with timeout: abort if Gemini doesn't respond within API_TIMEOUT_MS.
-        // Without this, a hung connection would leave the job stuck in "processing" forever.
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-        debug(jobId, `generate → ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
-        callGeminiAPI({
-          parts,
-          modalities: ["IMAGE"],
-          thinkingLevel: thinking_level,
-          includeThoughts: true,
-          signal: controller.signal,
-        }).then((result) => {
-          clearTimeout(timeout);
-          debug(jobId, `API returned ${result.data.length} bytes`);
-          writeFileSync(filePath, result.data);
-          debug(jobId, `wrote ${filePath}`);
-          completeJob(jobId);
-          debug(jobId, `complete`);
-        }).catch((err) => {
-          clearTimeout(timeout);
-          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
-          debug(jobId, `FAILED: ${msg}`);
-          failJob(jobId, msg);
+        // Throttled fire-and-forget: limits concurrent API calls and staggers requests
+        // to avoid the Gemini API silently dropping burst requests.
+        debug(jobId, `generate → ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}" (queue: ${apiQueue.length} waiting, ${apiCallsInFlight} in flight)`);
+        enqueueApiCall(() => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+          debug(jobId, `API call started`);
+          return callGeminiAPI({
+            parts,
+            modalities: ["IMAGE"],
+            thinkingLevel: thinking_level,
+            includeThoughts: true,
+            signal: controller.signal,
+          }).then((result) => {
+            clearTimeout(timeout);
+            debug(jobId, `API returned ${result.data.length} bytes`);
+            writeFileSync(filePath, result.data);
+            debug(jobId, `wrote ${filePath}`);
+            completeJob(jobId);
+            debug(jobId, `complete`);
+          }).catch((err) => {
+            clearTimeout(timeout);
+            const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+            debug(jobId, `FAILED: ${msg}`);
+            failJob(jobId, msg);
+          });
         });
 
         try { await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`); } catch { /* non-fatal */ }
@@ -608,7 +674,9 @@ export function createServer() {
         const filename = generateFilename(prompt);
         const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
-        const estimated = estimateSeconds(image_size, thinking_level);
+        const baseEstimate = estimateSeconds(image_size, thinking_level);
+        const queueWait = apiQueue.length * STAGGER_DELAY_MS / 1000;
+        const estimated = Math.round(baseEstimate + queueWait);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
 
         // Validate images (may await). If validation fails, mark job as failed.
@@ -626,28 +694,31 @@ export function createServer() {
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
 
-        // Fire-and-forget with timeout: abort if Gemini doesn't respond within API_TIMEOUT_MS.
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-        debug(jobId, `edit → ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
-        callGeminiAPI({
-          parts,
-          modalities: ["IMAGE"],
-          thinkingLevel: thinking_level,
-          includeThoughts: true,
-          signal: controller.signal,
-        }).then((result) => {
-          clearTimeout(timeout);
-          debug(jobId, `API returned ${result.data.length} bytes`);
-          writeFileSync(filePath, result.data);
-          debug(jobId, `wrote ${filePath}`);
-          completeJob(jobId);
-          debug(jobId, `complete`);
-        }).catch((err) => {
-          clearTimeout(timeout);
-          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
-          debug(jobId, `FAILED: ${msg}`);
-          failJob(jobId, msg);
+        // Throttled fire-and-forget: limits concurrent API calls and staggers requests.
+        debug(jobId, `edit → ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}" (queue: ${apiQueue.length} waiting, ${apiCallsInFlight} in flight)`);
+        enqueueApiCall(() => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+          debug(jobId, `API call started`);
+          return callGeminiAPI({
+            parts,
+            modalities: ["IMAGE"],
+            thinkingLevel: thinking_level,
+            includeThoughts: true,
+            signal: controller.signal,
+          }).then((result) => {
+            clearTimeout(timeout);
+            debug(jobId, `API returned ${result.data.length} bytes`);
+            writeFileSync(filePath, result.data);
+            debug(jobId, `wrote ${filePath}`);
+            completeJob(jobId);
+            debug(jobId, `complete`);
+          }).catch((err) => {
+            clearTimeout(timeout);
+            const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1000}s — the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+            debug(jobId, `FAILED: ${msg}`);
+            failJob(jobId, msg);
+          });
         });
 
         try { await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." → ${filePath} (est. ~${estimated}s)`); } catch { /* non-fatal */ }

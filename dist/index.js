@@ -21088,6 +21088,50 @@ var JOB_TTL_MS = 30 * 60 * 1e3;
 var MAX_CONCURRENT_JOBS = 5;
 var MAX_TOTAL_JOBS = 100;
 var MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+var MAX_CONCURRENT_API_CALLS = 2;
+var STAGGER_DELAY_MS = process.env.NANOBANANA_TEST ? 0 : 1e4;
+var STAGGER_JITTER_MS = process.env.NANOBANANA_TEST ? 0 : 2e3;
+var apiCallsInFlight = 0;
+var apiQueue = [];
+var lastApiCallStart = 0;
+function staggerDelay() {
+  return STAGGER_DELAY_MS + Math.round((Math.random() * 2 - 1) * STAGGER_JITTER_MS);
+}
+function scheduleNextApiCall() {
+  if (apiQueue.length === 0) return;
+  if (apiCallsInFlight >= MAX_CONCURRENT_API_CALLS) return;
+  const now = Date.now();
+  const elapsed = now - lastApiCallStart;
+  const targetDelay = staggerDelay();
+  const delay = Math.max(0, targetDelay - elapsed);
+  setTimeout(() => {
+    if (apiQueue.length === 0) return;
+    if (apiCallsInFlight >= MAX_CONCURRENT_API_CALLS) return;
+    const { run } = apiQueue.shift();
+    apiCallsInFlight++;
+    lastApiCallStart = Date.now();
+    run();
+  }, delay);
+}
+function releaseApiSlot() {
+  apiCallsInFlight--;
+  scheduleNextApiCall();
+}
+function enqueueApiCall(fn) {
+  const position = apiQueue.length;
+  return new Promise((resolve2) => {
+    apiQueue.push({
+      run: () => resolve2(fn())
+    });
+    scheduleNextApiCall();
+  }).finally(releaseApiSlot);
+}
+function apiQueuePosition() {
+  return apiQueue.length;
+}
+function apiCallsActive() {
+  return apiCallsInFlight;
+}
 function pruneJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, job] of jobs) {
@@ -21384,29 +21428,34 @@ function createServer() {
         if (style) jsonPrompt.style = style;
         if (visual_dna) jsonPrompt.visual_dna = visual_dna;
         const parts = [{ text: JSON.stringify(jsonPrompt) }];
-        const estimated = estimateSeconds(image_size, thinking_level);
+        const baseEstimate = estimateSeconds(image_size, thinking_level);
+        const queueWait = apiQueue.length * STAGGER_DELAY_MS / 1e3;
+        const estimated = Math.round(baseEstimate + queueWait);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-        debug(jobId, `generate \u2192 ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
-        callGeminiAPI({
-          parts,
-          modalities: ["IMAGE"],
-          thinkingLevel: thinking_level,
-          includeThoughts: true,
-          signal: controller.signal
-        }).then((result) => {
-          clearTimeout(timeout);
-          debug(jobId, `API returned ${result.data.length} bytes`);
-          writeFileSync(filePath, result.data);
-          debug(jobId, `wrote ${filePath}`);
-          completeJob(jobId);
-          debug(jobId, `complete`);
-        }).catch((err) => {
-          clearTimeout(timeout);
-          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
-          debug(jobId, `FAILED: ${msg}`);
-          failJob(jobId, msg);
+        debug(jobId, `generate \u2192 ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}" (queue: ${apiQueue.length} waiting, ${apiCallsInFlight} in flight)`);
+        enqueueApiCall(() => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+          debug(jobId, `API call started`);
+          return callGeminiAPI({
+            parts,
+            modalities: ["IMAGE"],
+            thinkingLevel: thinking_level,
+            includeThoughts: true,
+            signal: controller.signal
+          }).then((result) => {
+            clearTimeout(timeout);
+            debug(jobId, `API returned ${result.data.length} bytes`);
+            writeFileSync(filePath, result.data);
+            debug(jobId, `wrote ${filePath}`);
+            completeJob(jobId);
+            debug(jobId, `complete`);
+          }).catch((err) => {
+            clearTimeout(timeout);
+            const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+            debug(jobId, `FAILED: ${msg}`);
+            failJob(jobId, msg);
+          });
         });
         try {
           await ctx?.mcpReq?.log("info", `Queued image generation: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
@@ -21456,7 +21505,9 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         const filename = generateFilename(prompt);
         const filePath = join(getOutputDir(), filename);
         const jobId = randomBytes(6).toString("hex");
-        const estimated = estimateSeconds(image_size, thinking_level);
+        const baseEstimate = estimateSeconds(image_size, thinking_level);
+        const queueWait = apiQueue.length * STAGGER_DELAY_MS / 1e3;
+        const estimated = Math.round(baseEstimate + queueWait);
         createJob(jobId, filePath, prompt, estimated, image_size, thinking_level);
         let imageParts;
         try {
@@ -21470,27 +21521,30 @@ Estimated time: ~${estimated}s \u2014 check back with check_generation(job_id) a
         }
         const jsonPrompt = { content: prompt, aspect_ratio, image_size };
         const parts = [...imageParts, { text: JSON.stringify(jsonPrompt) }];
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-        debug(jobId, `edit \u2192 ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}"`);
-        callGeminiAPI({
-          parts,
-          modalities: ["IMAGE"],
-          thinkingLevel: thinking_level,
-          includeThoughts: true,
-          signal: controller.signal
-        }).then((result) => {
-          clearTimeout(timeout);
-          debug(jobId, `API returned ${result.data.length} bytes`);
-          writeFileSync(filePath, result.data);
-          debug(jobId, `wrote ${filePath}`);
-          completeJob(jobId);
-          debug(jobId, `complete`);
-        }).catch((err) => {
-          clearTimeout(timeout);
-          const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
-          debug(jobId, `FAILED: ${msg}`);
-          failJob(jobId, msg);
+        debug(jobId, `edit \u2192 ${image_size}/${thinking_level}, prompt="${prompt.slice(0, 60)}" (queue: ${apiQueue.length} waiting, ${apiCallsInFlight} in flight)`);
+        enqueueApiCall(() => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+          debug(jobId, `API call started`);
+          return callGeminiAPI({
+            parts,
+            modalities: ["IMAGE"],
+            thinkingLevel: thinking_level,
+            includeThoughts: true,
+            signal: controller.signal
+          }).then((result) => {
+            clearTimeout(timeout);
+            debug(jobId, `API returned ${result.data.length} bytes`);
+            writeFileSync(filePath, result.data);
+            debug(jobId, `wrote ${filePath}`);
+            completeJob(jobId);
+            debug(jobId, `complete`);
+          }).catch((err) => {
+            clearTimeout(timeout);
+            const msg = err.name === "AbortError" ? `Generation timed out after ${API_TIMEOUT_MS / 1e3}s \u2014 the Gemini API did not respond. Try again or use a simpler prompt.` : err.message;
+            debug(jobId, `FAILED: ${msg}`);
+            failJob(jobId, msg);
+          });
         });
         try {
           await ctx?.mcpReq?.log("info", `Queued image edit: "${prompt.slice(0, 60)}..." \u2192 ${filePath} (est. ~${estimated}s)`);
@@ -21741,12 +21795,15 @@ if (!process.env.NANOBANANA_TEST) {
 }
 export {
   activeJobCount,
+  apiCallsActive,
+  apiQueuePosition,
   assertPathAllowed,
   callGeminiAPI,
   completeJob,
   createJob,
   createServer,
   detectMimeType,
+  enqueueApiCall,
   estimateSeconds,
   failJob,
   generateFilename,

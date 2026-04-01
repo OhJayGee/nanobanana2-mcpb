@@ -129,7 +129,7 @@ describe("MCP server e2e", () => {
     const jobId = text.match(/job_id:\s*(\S+)/)[1];
 
     // Wait for background task to complete
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Poll check_generation
     const check = await client.callTool({ name: "check_generation", arguments: { job_id: jobId } });
@@ -152,7 +152,7 @@ describe("MCP server e2e", () => {
         arguments: { prompt: "should fail", image_size: "0.5K", thinking_level: "minimal" },
       });
       const jobId = result.content[0].text.match(/job_id:\s*(\S+)/)[1];
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       const check = await client.callTool({ name: "check_generation", arguments: { job_id: jobId } });
       assert.ok(check.content[0].text.includes("GEMINI_API_KEY"), "should mention missing key");
     } finally {
@@ -178,7 +178,7 @@ describe("MCP server e2e", () => {
       arguments: { prompt: "signal test", image_size: "0.5K", thinking_level: "minimal" },
     });
     assert.ok(result.content[0].text.includes("job_id:"));
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
     assert.ok(capturedSignal instanceof AbortSignal, "fetch should receive an AbortSignal");
     assert.ok(!capturedSignal.aborted, "signal should not be aborted for a fast response");
   });
@@ -289,6 +289,9 @@ describe("MCP server e2e", () => {
       arguments: { images: [jpegPath], prompt: "test edit", image_size: "0.5K", thinking_level: "minimal" },
     });
 
+    // Wait for the throttled API call to execute
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
     // Decode the base64 that was sent to the API and verify EXIF is gone
     const sentParts = capturedBody.contents[0].parts;
     const imagePart = sentParts.find((p) => p.inlineData);
@@ -382,7 +385,7 @@ describe("MCP server e2e", () => {
       arguments: { prompt: "blocked content", image_size: "0.5K", thinking_level: "minimal" },
     });
     const jobId = result.content[0].text.match(/job_id:\s*(\S+)/)[1];
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     const check = await client.callTool({ name: "check_generation", arguments: { job_id: jobId } });
     assert.ok(check.content[0].text.includes("failed"), "job should be failed");
